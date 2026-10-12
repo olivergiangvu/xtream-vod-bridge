@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.1.2 — HomeDocker
+# Xtream VOD Bridge v0.1.3 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -114,7 +114,8 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 ## Safety, operation, backup, and rollback
 
 - **Deployment state:** a **prototype**, packaged/tested locally without real Xtream credentials, upstream network, or AIOStreams end-to-end integration. Test with one movie and one TV episode before production.
-- Provider redirects are refused unless they point to the Xtream host or hosts explicitly declared in `XTREAM_REDIRECT_ALLOWED_HOSTS` (comma-separated FQDNs). HTTPS provider redirects cannot downgrade to HTTP. For CDN-backed IPTV, approve only trusted CDN hostnames, never a wildcard.
+- **Default: HTTPS→HTTP remains blocked.** Some legitimate IPTV Xtream panels respond with an HTTPS `302` to a **plain HTTP CDN IP**. For an explicitly verified, authorized provider only, `XTREAM_HTTP_REDIRECT_ALLOWED_IPS` permits an exact **public IPv4** destination on default HTTP port 80. This is a separate opt-in from `XTREAM_REDIRECT_ALLOWED_HOSTS` (HTTPS CDN hostnames). No private/loopback/link-local IPs, DNS hostnames, wildcards, unexpected ports or arbitrary redirect targets are permitted for HTTP downgrade. The opt-in is empty by default.
+- **Security trade-off:** public client → nginx remains HTTPS and signed; however **HomeDocker → approved CDN IP uses unencrypted HTTP**, exposing media bytes and potentially stream URL tokens to networks along that hop. Never assume the redirect IP belongs to the provider without verification, and never insert your IPTV username/password into the allowlist. If this risk is unacceptable, ask the provider for an HTTPS CDN endpoint instead.
 - An empty provider list response will preserve the existing index as an anti-data-loss safeguard. To intentionally clear an index, use an explicit maintenance procedure.
 - Provider credentials are held in `.env` in the Docker environment. Only host administrators with Docker permissions should access it; a person with Docker socket access can inspect environment variables. Do not publish the `.env` file or add it to Git.
 - An Xtream subscription may limit simultaneous connections or bind an IP; when using the byte-forwarding relay, the provider sees **HomeDocker's public egress IP**, not each remote device. Verify provider terms, rights, max sessions, and geographic limits.
@@ -122,7 +123,7 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
-- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.1.1`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.1.3`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
 - Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
 - Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
 

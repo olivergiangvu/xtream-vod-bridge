@@ -1,5 +1,6 @@
 """Xtream VOD -> Stremio streams bridge (single authorised provider, metadata-ID indexed)."""
 import asyncio
+import ipaddress
 import hashlib
 import hmac
 import json
@@ -17,7 +18,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -42,6 +43,10 @@ MOVIES_ONLY = os.getenv("MOVIES_ONLY", "0") == "1"
 # only approved CDN hostnames, not arbitrary targets supplied by the provider.
 REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
                           os.getenv("XTREAM_REDIRECT_ALLOWED_HOSTS", "").split(",") if host.strip()}
+# Opt-in for HTTPS provider -> plain HTTP public IPv4 CDN hops only.
+# This is explicitly distinct from the HTTPS redirect allowlist.
+HTTP_REDIRECT_ALLOWED_IPS = {ip.strip() for ip in
+                             os.getenv("XTREAM_HTTP_REDIRECT_ALLOWED_IPS", "").split(",") if ip.strip()}
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "index.sqlite"
 VALID_EXT = re.compile(r"^(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
@@ -68,6 +73,13 @@ def check_settings():
             raise RuntimeError(f"{key} requires at least 32 random characters")
     if len({ADDON_TOKEN, ADMIN_TOKEN, SECRET}) < 3:
         raise RuntimeError("Each secret must be different")
+    for value in HTTP_REDIRECT_ALLOWED_IPS:
+        try:
+            address = ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise RuntimeError("HTTP redirect allowlist requires public IPv4 addresses") from exc
+        if not isinstance(address, ipaddress.IPv4Address) or not address.is_global or value != str(address):
+            raise RuntimeError("HTTP redirect allowlist requires canonical public IPv4 addresses")
 
 
 @contextmanager
@@ -500,23 +512,38 @@ def make_stream_client():
 
 
 def safe_redirect(target):
-    parsed = urlsplit(target)
-    source = urlsplit(BASE)
-    if parsed.username or parsed.password or not parsed.hostname or parsed.scheme not in ("http", "https"):
+    try:
+        parsed = urlsplit(target)
+        source = urlsplit(BASE)
+        if parsed.username or parsed.password or not parsed.hostname or parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname.lower()
+        port = parsed.port  # Invalid ports must fail closed.
+        if source.scheme == "https" and parsed.scheme == "http":
+            # Exception ONLY for explicitly approved globally routable IPv4
+            # CDN destinations on port 80. No hostnames, private/multicast IPs,
+            # wildcard allowlists or other destination ports can downgrade TLS.
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                return False
+            return (
+                isinstance(address, ipaddress.IPv4Address)
+                and address.is_global
+                and str(address) in HTTP_REDIRECT_ALLOWED_IPS
+                and port in (None, 80)
+            )
+        if host == source.hostname.lower():
+            # Same-origin redirects may use the provider's configured port or the
+            # standard scheme port, but never arbitrary service ports.
+            scheme_port = 443 if parsed.scheme == "https" else 80
+            return port in (None, scheme_port, source.port)
+        # HTTPS CDN redirects still need an explicit hostname allowlist.
+        if host in REDIRECT_ALLOWED_HOSTS:
+            return port in (None, 443 if parsed.scheme == "https" else 80)
         return False
-    # Never downgrade HTTPS provider to plain HTTP, including an allowed CDN.
-    if source.scheme == "https" and parsed.scheme != "https":
+    except ValueError:
         return False
-    host = parsed.hostname.lower()
-    if host == source.hostname.lower():
-        # Same-origin redirects may use the provider's configured port or the
-        # standard scheme port, but never arbitrary service ports.
-        scheme_port = 443 if parsed.scheme == "https" else 80
-        return parsed.port in (None, scheme_port, source.port)
-    # Explicitly allowed CDN redirects may only use default HTTP(S) ports.
-    if host in REDIRECT_ALLOWED_HOSTS:
-        return parsed.port in (None, 443 if parsed.scheme == "https" else 80)
-    return False
 
 
 @app.api_route("/play/{kind}/{sid}.{ext}", methods=["GET", "HEAD"])
