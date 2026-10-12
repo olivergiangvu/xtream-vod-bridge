@@ -123,6 +123,61 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(bridge.safe_redirect("https://cdn.example.invalid:22/a"))
         self.assertFalse(bridge.safe_redirect("https://example.invalid:22/admin"))
 
+    async def test_http_cdn_downgrade_opt_in_and_range(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('movie',47,'Fake Film','mp4')")
+        suffix = bridge.signed_url("movie", 47, "mp4")[len(bridge.PUBLIC):]
+        seen = []
+
+        def redirected(request):
+            seen.append(request)
+            if request.url.host == "example.invalid":
+                return httpx.Response(302, headers={"Location": "http://68.235.50.231/media/asset.mp4"})
+            return httpx.Response(206, content=b"abcd",
+                                  headers={"Content-Range": "bytes 0-3/10"})
+
+        def factory():
+            return httpx.AsyncClient(transport=httpx.MockTransport(redirected),
+                                     follow_redirects=False)
+
+        # A valid public IPv4 redirect still fails unless explicitly enabled.
+        with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", set()), \\
+             patch.object(bridge, "make_stream_client", factory):
+            self.assertEqual(self.client.get(suffix, headers={"Range": "bytes=0-3"}).status_code, 502)
+
+        seen.clear()
+        with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", {"68.235.50.231"}), \\
+             patch.object(bridge, "make_stream_client", factory):
+            response = self.client.get(suffix, headers={"Range": "bytes=0-3"})
+        self.assertEqual(response.status_code, 206)
+        self.assertEqual(response.content, b"abcd")
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(seen[1].url.scheme, "http")
+        self.assertEqual(seen[1].headers.get("range"), "bytes=0-3")
+        self.assertNotIn("example", str(seen[1].url))
+        self.assertNotIn(bridge.PASSWORD, str(seen[1].url))
+
+    async def test_http_cdn_only_exact_global_ipv4_port_80(self):
+        with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS",
+                          {"68.235.50.231", "127.0.0.1", "192.168.1.1", "169.254.169.254", "cdn.example.invalid"}):
+            self.assertTrue(bridge.safe_redirect("http://68.235.50.231/asset.mp4"))
+            self.assertTrue(bridge.safe_redirect("http://68.235.50.231:80/asset.mp4"))
+            for target in (
+                "http://68.235.50.232/asset.mp4",
+                "http://68.235.50.231:8080/asset.mp4",
+                "http://68.235.50.231:22/asset.mp4",
+                "http://127.0.0.1/asset.mp4",
+                "http://192.168.1.1/asset.mp4",
+                "http://169.254.169.254/latest/meta-data/",
+                "http://cdn.example.invalid/asset.mp4",
+                "http://u:p@68.235.50.231/asset.mp4",
+                "file:///etc/passwd",
+                "http://68.235.50.231:invalid/asset.mp4",
+                "http://[::1]/asset.mp4",
+            ):
+                with self.subTest(target=target):
+                    self.assertFalse(bridge.safe_redirect(target))
+
     async def test_transient_empty_listing_does_not_delete_index(self):
         with bridge.db() as con:
             con.execute("INSERT INTO items(kind,item_id,name,extension,last_seen) VALUES ('movie',7,'Preserved','mp4',1)")
