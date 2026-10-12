@@ -225,6 +225,8 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(bridge.safe_redirect("http://127.0.0.1/file.mkv"))
             self.assertFalse(bridge.safe_redirect("http://192.168.50.153/file.mkv"))
             self.assertFalse(bridge.safe_redirect("http://169.254.169.254/latest/meta-data/"))
+            self.assertFalse(bridge.safe_redirect("http://224.0.0.1/udp"))
+            self.assertFalse(bridge.safe_redirect("http://240.0.0.1/reserved"))
             self.assertFalse(bridge.safe_redirect("http://public.example.org/asset.mkv"))
             self.assertFalse(bridge.safe_redirect("file:///etc/passwd"))
         with (patch.object(bridge, "HTTP_REDIRECT_MODE", "allowlist"),
