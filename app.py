@@ -89,7 +89,8 @@ def check_settings():
             address = ipaddress.ip_address(value)
         except ValueError as exc:
             raise RuntimeError("HTTP redirect allowlist requires public IPv4 addresses") from exc
-        if not isinstance(address, ipaddress.IPv4Address) or not address.is_global or value != str(address):
+        if (not isinstance(address, ipaddress.IPv4Address) or not address.is_global
+                or address.is_multicast or address.is_reserved or value != str(address)):
             raise RuntimeError("HTTP redirect allowlist requires canonical public IPv4 addresses")
 
 
@@ -656,6 +657,7 @@ def safe_redirect(target):
             return (
                 isinstance(address, ipaddress.IPv4Address)
                 and address.is_global
+                and not address.is_multicast and not address.is_reserved
                 and (HTTP_REDIRECT_MODE == "public-ip" or str(address) in HTTP_REDIRECT_ALLOWED_IPS)
                 and port in (None, 80)
             )
