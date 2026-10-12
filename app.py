@@ -19,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -280,15 +280,41 @@ def find_anime_ids(payload):
     return result
 
 
-def friendly_filename(name, kind, ext, season=None, episode=None):
-    """Clean UTF-8 basename is the last URL component for mpv/metadata scrapers."""
+def quality_hint(*names):
+    """Conservative quality tag from Xtream titles; never claim measured pixels."""
+    for raw in names:
+        text = unicodedata.normalize("NFKC", str(raw or ""))
+        # Prefer explicit dimensions over promotional shorthand if both occur.
+        for token, label in (
+            ("2160p", "2160p"), ("1080p", "1080p"),
+            ("720p", "720p"), ("480p", "480p"),
+        ):
+            if re.search(r"(?<!\w)" + token + r"(?!\w)", text, re.I):
+                return label
+        for tags, label in (
+            (("4K", "UHD"), "2160p"),
+            (("FHD",), "1080p"),
+            (("HD",), "720p"),
+            (("SD",), "480p"),
+        ):
+            if any(re.search(r"(?<!\w)" + tag + r"(?!\w)", text, re.I) for tag in tags):
+                return label
+    return None
+
+
+def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
+    """Keep metadata-detectable film/episode names and distinguish tagged variants."""
     text = unicodedata.normalize("NFKC", str(name or "Media"))
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
-    text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|1080P|2160P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
+    text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|SD|1080P|2160P|720P|480P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
+    # A suffix like "(4K)" or "[2160p]" is a source property, not film title.
+    text = re.sub(r"(?:\s*[\[(](?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P)[\])])+$", "", text, flags=re.I)
     text = re.sub(r"[^\w]+", ".", text, flags=re.UNICODE).strip(".")
-    text = text[:145].rstrip(".") or "Media"
+    text = text[:140].rstrip(".") or "Media"
     if kind == "series":
         text += f".S{int(season):02d}E{int(episode):02d}"
+    if quality:
+        text += f".{quality}"
     return f"{text}.{ext}"
 
 
@@ -575,14 +601,17 @@ async def streams(token: str, media_type: str, media_id: str):
     result = []
     for row in rows:
         if media_type == "movie":
-            selected = [(row["item_id"], row["extension"])]
+            selected = [(row["item_id"], row["extension"], None)]
         else:
             with db() as con:
                 eps = con.execute("SELECT * FROM episodes WHERE series_id=? AND season=? AND episode=?",
                                   (row["item_id"], int(season), int(episode))).fetchall()
-            selected = [(r["stream_id"], r["extension"]) for r in eps]
-        for sid, ext in selected:
-            filename = friendly_filename(row["name"], media_type, ext, season, episode)
+            selected = [(r["stream_id"], r["extension"], r["name"]) for r in eps]
+        for sid, ext, episode_name in selected:
+            # An episode may have its own quality tag even if series title does not.
+            quality = quality_hint(episode_name, row["name"])
+            filename = friendly_filename(row["name"], media_type, ext, season, episode,
+                                         quality=quality)
             # Carry the exact Stremio request identity downstream. This also
             # preserves a requested IMDb ID when only TMDb was stored locally,
             # or a requested Kitsu/AniList ID when the row has an IMDb as well.
@@ -590,12 +619,13 @@ async def streams(token: str, media_type: str, media_id: str):
             if not MEDIA_KEY.fullmatch(identity):
                 continue
             metadata_label = identity.replace("tmdb-", "TMDb ").replace("anilist-", "AniList ").replace("kitsu-", "Kitsu ").replace("mal-", "MAL ")
+            source_name = "IPTV VOD" + (f" {quality}" if quality else "")
             hints = {"notWebReady": ext.lower() != "mp4", "filename": filename}
             if media_type == "series":
                 hints["bingeGroup"] = f"xtream-vod-series-{row['item_id']}"
-            result.append({"name": "IPTV VOD",
-                           "title": f"{filename} | {metadata_label} | IPTV VOD",
-                           "description": f"{filename} | {metadata_label} | IPTV VOD",
+            result.append({"name": source_name,
+                           "title": f"{filename} | {metadata_label} | {source_name}",
+                           "description": f"{filename} | {metadata_label} | {source_name}",
                            "url": signed_url(media_type, sid, ext,
                                              filename=filename, identity=identity),
                            "behaviorHints": hints})
