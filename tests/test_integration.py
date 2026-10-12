@@ -137,6 +137,112 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                      "mkv", quality="2160p"),
             "Zootopia.2.2025.2160p.mkv")
 
+    async def test_series_detail_priority_with_large_movie_backlog(self):
+        """Never starve episodes behind tens of thousands of movie details."""
+        with bridge.db() as con:
+            con.executemany(
+                "INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                "VALUES ('movie',?,?, 'mkv',?)",
+                [(i, f"Film {i}", f"tt{i:07d}") for i in range(1, 201)],
+            )
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('series',701,'Example Anime','mkv','tt7654321')")
+
+        calls = []
+
+        async def fake_xtream(action, **params):
+            calls.append(action)
+            if action == "get_vod_streams":
+                # Listing refresh contains only the same movie entries.
+                return [{"stream_id": i, "name": f"Film {i}",
+                         "container_extension": "mkv", "imdb_id": f"tt{i:07d}"}
+                        for i in range(1, 201)]
+            if action == "get_series":
+                return [{"series_id": 701, "name": "Example Anime",
+                         "imdb_id": "tt7654321"}]
+            if action == "get_series_info":
+                return {"episodes": {"1": [
+                    {"id": 991, "episode_num": 1,
+                     "container_extension": "mkv", "title": "Episode 1"}]}}
+            if action == "get_vod_info":
+                return {"info": {"imdb_id": "tt0133093"}}
+            raise AssertionError("Unexpected action")
+
+        with (patch.object(bridge, "xtream", new=fake_xtream),
+              patch.object(bridge, "MOVIES_ONLY", False),
+              patch.object(bridge, "MAX_ENRICH", 5),
+              patch.object(bridge, "SERIES_SYNC_QUOTA", 3),
+              patch.object(bridge.asyncio, "sleep", new=AsyncMock())):
+            result = await bridge.sync_all()
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["series_enriched"], 1)
+        self.assertEqual(result["movie_enriched"], 4)
+        self.assertEqual(result["enriched"], 5)
+        self.assertEqual(calls.count("get_series_info"), 1)
+        self.assertEqual(calls.count("get_vod_info"), 4)
+        self.assertEqual(self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:1.json").status_code, 200)
+        with bridge.db() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM episodes").fetchone()[0], 1)
+        health = self.client.get("/health").json()
+        self.assertEqual(health["series_progress"]["details_checked"], 1)
+        self.assertEqual(health["series_progress"]["with_episodes"], 1)
+        self.assertEqual(health["series_progress"]["pending_enrichment"], 0)
+
+    async def test_series_bootstrap_batch_resumes_from_checked_at(self):
+        with bridge.db() as con:
+            con.executemany(
+                "INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                "VALUES ('series', ?, ?, 'mkv', ?)",
+                [(s, f"Series {s}", f"tt{s:07d}") for s in range(501, 506)]
+            )
+        enriched = []
+
+        async def fake_xtream(action, **params):
+            self.assertEqual(action, "get_series_info")
+            series_id = params["series_id"]
+            enriched.append(series_id)
+            return {"episodes": {"1": [
+                {"id": series_id + 5000, "episode_num": 2,
+                 "container_extension": "mkv", "title": "Episode 2"}]}}
+
+        with (patch.object(bridge, "xtream", new=fake_xtream),
+              patch.object(bridge.asyncio, "sleep", new=AsyncMock())):
+            first = await bridge.enrich_items(kind="series", limit=2)
+            second = await bridge.enrich_items(kind="series", limit=2)
+            third = await bridge.enrich_items(kind="series", limit=2)
+            empty = await bridge.enrich_items(kind="series", limit=2)
+
+        self.assertEqual((first, second, third, empty), (2, 2, 1, 0))
+        self.assertEqual(enriched, [501, 502, 503, 504, 505])
+        self.assertEqual(bridge.pending_count("series"), 0)
+        with bridge.db() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM episodes").fetchone()[0], 5)
+            self.assertEqual(con.execute(
+                "SELECT COUNT(*) FROM items WHERE kind='series' AND checked_at > 0"
+            ).fetchone()[0], 5)
+
+    async def test_movies_only_does_not_touch_indexed_series(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('series',701,'Keep this series','mkv','tt7654321')")
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('movie', 21,'Film','mkv','tt0133093')")
+        async def fake_xtream(action, **params):
+            if action == "get_vod_streams":
+                return [{"stream_id": 21, "name": "Film", "imdb_id": "tt0133093"}]
+            if action == "get_vod_info":
+                return {"info": {"imdb_id": "tt0133093"}}
+            raise AssertionError("Movie-only sync must not contact Series")
+        with (patch.object(bridge, "xtream", new=fake_xtream),
+              patch.object(bridge, "MOVIES_ONLY", True),
+              patch.object(bridge, "MAX_ENRICH", 2),
+              patch.object(bridge.asyncio, "sleep", new=AsyncMock())):
+            result = await bridge.sync_all()
+        self.assertEqual(result["movie_enriched"], 1)
+        self.assertEqual(result["series_enriched"], 0)
+        self.assertEqual(bridge.pending_count("series"), 1)
+
     async def test_signed_playback_range_head_and_tampering(self):
         with bridge.db() as con:
             con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('movie',45,'Fake Film','mp4')")
