@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.2.2 — HomeDocker
+# Xtream VOD Bridge v0.3.0 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -25,6 +25,30 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
 ### What Xtream metadata must contain
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## v0.3.0: demand-first Series resolver (opt-in)
+
+Instead of waiting days for full episode pre-indexing, an incoming Stremio `stream/series/tt...:season:episode` request can now hydrate a **cold Series** directly through Xtream `get_series_info(series_id)`. First read and write use the **existing persistent SQLite** episode tables. On the next query, the same episode is served from SQLite, including after process restarts.
+
+Turn on only for a controlled HomeDocker pilot:
+
+```dotenv
+MOVIES_ONLY=0
+SERIES_ON_DEMAND=1
+SERIES_BOOTSTRAP_BATCH=0
+SERIES_JIT_TIMEOUT_SECONDS=8
+SERIES_JIT_TTL_HOURS=6
+SERIES_JIT_RETRY_SECONDS=120
+SERIES_JIT_MAX_VARIANTS=8
+```
+
+An already-hydrated Series returns immediately. For a cold Series, up to eight matching provider Series variants are considered (IMDb/TMDb/AniList/Kitsu exact-ID matches from the existing inventory). Fetches are bounded to **two concurrent** detail requests, use a separate per-Series single-flight lock, and have a **whole-request 8-second deadline**. Successful variants are returned even if other variants time out, preserving 4K and 1080p alternatives. Failed requests are locally cooled down for 120 seconds. Requests missing an episode after a successful fetch are negatively cached for 6 hours; newly released episodes may therefore take up to that period to become visible.
+
+The request-time resolver never transmits Xtream username/password to AIOStreams. Signed HTTPS playback URLs, Range/206 relay, source names, mpv filename metadata, Movie VOD sorting and current databases remain unchanged. New nested Xtream episode shapes and season 0 are parsed by explicit episode numbers or SxxEyy filename patterns; missing ambiguous episode numbers are **not guessed**, to protect tracking accuracy.
+
+The index/list scheduler is retained, but its 25/30-minute Series bootstrap is no longer required for playback. Set `SERIES_BOOTSTRAP_BATCH=0` to stop full-library sweeping during v0.3. Use `/health.series_on_demand` and `/health.jit` for request counts (cache hits, misses, fetch, timeouts, negative cache). These counters are per process; the SQLite episode cache persists.
+
+**Limitations:** These are server-side implementation and offline test results, not live provider latency measurements. Full cross-provider Anime ID conversion, smart newly-released-episode TTL, provider cooldown based on Retry-After, and provider list grace-period pruning are separate tasks. The on-demand feature defaults **off**, so a binary-only upgrade preserves v0.2.2 behavior. Rollback simply disables `SERIES_ON_DEMAND` and recreates only the bridge. Never use `docker compose down -v`.
 
 ## v0.2.2: Series episode bootstrap without Movie starvation
 
@@ -173,7 +197,7 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
-- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.2`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.3.0`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
 - Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
 - Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
 
