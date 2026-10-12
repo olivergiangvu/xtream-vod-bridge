@@ -56,10 +56,10 @@ DB_PATH = DATA_DIR / "index.sqlite"
 VALID_EXT = re.compile(r"^(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
 VALID_ID = re.compile(r"^tt\d{7,10}$")
 STREAM_REQUEST = re.compile(r"^(tt\d{7,10})(?::(\d+):(\d+))?$")
-TMDB_REQUEST = re.compile(r"^tmdb:(?:(?:movie|tv|series):)?(\\d+)(?::(\\d+):(\\d+))?$")
-ANIME_REQUEST = re.compile(r"^(anilist|kitsu|mal):(\\d+)(?::(\\d+):(\\d+))?$")
-MEDIA_KEY = re.compile(r"^(?:tt\\d{7,10}|tmdb-(?:movie|tv)-\\d+|(?:anilist|kitsu|mal)-\\d+)$")
-FILENAME = re.compile(r"^[\\w.-]{1,200}\\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
+TMDB_REQUEST = re.compile(r"^tmdb:(?:(?:movie|tv|series):)?(\d+)(?::(\d+):(\d+))?$")
+ANIME_REQUEST = re.compile(r"^(anilist|kitsu|mal):(\d+)(?::(\d+):(\d+))?$")
+MEDIA_KEY = re.compile(r"^(?:tt\d{7,10}|tmdb-(?:movie|tv)-\d+|(?:anilist|kitsu|mal)-\d+)$")
+FILENAME = re.compile(r"^[\w.-]{1,200}\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
 ANIME_COLUMNS = {"anilist": "anilist_id", "kitsu": "kitsu_id", "mal": "mal_id"}
 
 LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None}
@@ -283,8 +283,8 @@ def friendly_filename(name, kind, ext, season=None, episode=None):
     """Clean UTF-8 basename is the last URL component for mpv/metadata scrapers."""
     text = unicodedata.normalize("NFKC", str(name or "Media"))
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
-    text = re.sub(r"^(?:(?:\\[(?:4K|UHD|HD|FHD|1080P|2160P)\\]|(?:4K|UHD|FHD)[\\s:_|-]+)\\s*)+", "", text, flags=re.I)
-    text = re.sub(r"[^\\w]+", ".", text, flags=re.UNICODE).strip(".")
+    text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|1080P|2160P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
+    text = re.sub(r"[^\w]+", ".", text, flags=re.UNICODE).strip(".")
     text = text[:145].rstrip(".") or "Media"
     if kind == "series":
         text += f".S{int(season):02d}E{int(episode):02d}"
