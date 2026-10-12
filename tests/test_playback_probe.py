@@ -36,6 +36,24 @@ class PlaybackPathTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe.playback_path(url, self.base)
 
+    def test_descriptive_series_episode_filename_url(self):
+        url = (self.base + "/play/series/345/tt1234567/1792005348/"
+               + "f" * 64 + "/Example.Show.S01E02.1080p.mkv")
+        path = probe.playback_path(url, self.base, media_kind="series")
+        self.assertTrue(path.endswith("/Example.Show.S01E02.1080p.mkv"))
+
+    def test_series_probe_rejects_foreign_origin_or_kind(self):
+        url = (self.base + "/play/series/345/tt1234567/1792005348/"
+               + "a" * 64 + "/Show.S01E01.mp4")
+        for origin in (
+            "https://example.com:18450", "https://olivergiangvu.asuscomm.com:18451",
+        ):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                probe.playback_path(url.replace(self.base, origin),
+                                    self.base, media_kind="series")
+        with self.assertRaises(ValueError):
+            probe.playback_path(url, self.base, media_kind="movie")
+
     def test_reject_other_host(self):
         with self.assertRaises(ValueError):
             probe.playback_path(
