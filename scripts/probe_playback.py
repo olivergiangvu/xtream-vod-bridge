@@ -4,7 +4,7 @@
 Run on HomeDocker: sudo python3 scripts/probe_playback.py
 - TLS verifies the configured public hostname but connects to local nginx loopback.
 - Never prints IPTV credentials, addon tokens, signed URLs, or response bodies.
-- Fetches no more than 1024 media bytes per selected movie.
+- Fetches no more than 1024 media bytes per selected movie/episode.
 """
 from __future__ import annotations
 
@@ -76,10 +76,46 @@ for row in con.execute(
     return ids[:limit]
 
 
-def playback_path(raw_url: str, base_url: str) -> str:
+def episode_ids(limit: int) -> list[str]:
+    """Choose up to N mapped, hydrated episodes across distinct Series.
+
+    Only emits validated IDs into this process; never prints titles, tokens,
+    provider URLs or internal database keys.
+    """
+    sql = """
+import sqlite3
+con=sqlite3.connect('/data/index.sqlite')
+for r in con.execute(
+    "SELECT i.imdb_id, i.tmdb_id, e.season, e.episode "
+    "FROM episodes e INNER JOIN items i "
+    "ON i.kind='series' AND i.item_id=e.series_id "
+    "WHERE (i.imdb_id LIKE 'tt%' OR i.tmdb_id IS NOT NULL) "
+    "GROUP BY e.series_id ORDER BY i.checked_at DESC LIMIT ?", (5,)
+):
+    imdb_id, tmdb_id, season, episode = r
+    if imdb_id and str(imdb_id).startswith('tt'):
+        print(f'{imdb_id}:{season}:{episode}')
+    elif tmdb_id:
+        print(f'tmdb:tv:{tmdb_id}:{season}:{episode}')
+"""
+    result = subprocess.run(
+        ["docker", "exec", "xtream-vod-bridge", "python", "-c", sql],
+        capture_output=True, text=True, timeout=15, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Series episode index unavailable")
+    valid = re.compile(
+        r"^(?:tt\d{7,10}|tmdb:tv:\d+):\d+:\d+$"
+    )
+    return [x for x in result.stdout.splitlines() if valid.fullmatch(x)][:limit]
+
+
+def playback_path(raw_url: str, base_url: str, media_kind: str = "movie") -> str:
     """Accept only playback signed URLs on this bridge's exact HTTPS origin."""
     target, public = urlsplit(raw_url), urlsplit(base_url)
-    prefix = public.path.rstrip("/") + "/play/movie/"
+    if media_kind not in ("movie", "series"):
+        raise ValueError("Unsupported media kind")
+    prefix = public.path.rstrip("/") + "/play/" + media_kind + "/"
     if (
         target.scheme != "https" or public.scheme != "https"
         or target.hostname != public.hostname
@@ -135,6 +171,8 @@ def main() -> int:
         description="Bounded HTTPS and byte-range probe; never prints secrets"
     )
     parser.add_argument("--samples", type=int, default=3)
+    parser.add_argument("--type", choices=("movie", "series"), default="movie",
+                        help="select mapped Movies or hydrated Series episodes")
     parser.add_argument("--timeout", type=float, default=25.0)
     args = parser.parse_args()
     if not 1 <= args.samples <= 5 or not 2 <= args.timeout <= 60:
@@ -175,14 +213,16 @@ def main() -> int:
         if status != 200 or "stream" not in manifest.get("resources", []):
             raise RuntimeError("Stremio manifest invalid")
 
-        candidates = movie_ids(args.samples)
-        print("CANDIDATE_MOVIES:", len(candidates))
+        candidates = (episode_ids(args.samples) if args.type == "series"
+                      else movie_ids(args.samples))
+        print("CANDIDATE_EPISODES:" if args.type == "series" else "CANDIDATE_MOVIES:",
+              len(candidates))
         if not candidates:
-            raise RuntimeError("No enriched IMDb movie IDs")
+            raise RuntimeError("No hydrated mapped content IDs for selected type")
         results: list[str] = []
         for index, media_id in enumerate(candidates, start=1):
             try:
-                status, _, payload = get(prefix + "/stream/movie/" + media_id + ".json")
+                status, _, payload = get(prefix + "/stream/" + args.type + "/" + media_id + ".json")
                 if status != 200:
                     print(f"SAMPLE_{index}: STREAM_HTTP_{status}")
                     results.append("NO_STREAM")
@@ -192,7 +232,16 @@ def main() -> int:
                     print(f"SAMPLE_{index}: STREAM_EMPTY")
                     results.append("NO_STREAM")
                     continue
-                path = playback_path(streams[0].get("url", ""), public_url)
+                path = playback_path(streams[0].get("url", ""), public_url,
+                                     media_kind=args.type)
+                if args.type == "series":
+                    clean_filename = bool(re.search(
+                        r"\.S\d{2,3}E\d{2,3}\.", unquote(path), re.I
+                    ))
+                    print(f"SAMPLE_{index}: CLEAN_EPISODE_FILENAME={clean_filename}")
+                    if not clean_filename:
+                        results.append("BAD_FILENAME")
+                        continue
                 status, headers, data = get(
                     path, headers={"Range": "bytes=0-1023"}, max_bytes=1024,
                 )
