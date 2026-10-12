@@ -7,7 +7,7 @@
 - [x] Suppress Uvicorn access logs (addon tokens and signed links)
 - [x] Suppress HTTPX INFO logs (Xtream query-parameter credentials)
 - [x] Sanitize exception text exposed via `/health`
-- [ ] Run GitHub Actions CI on first push (cannot be verified offline)
+- [x] Run GitHub Actions CI on first push (v0.1.1: 6/6 offline tests passed)
 - [ ] Lock application dependencies and base-image digest for reproducible DR
 - [ ] Decide public/private GHCR image publication and digest pinning after testing
 
@@ -22,7 +22,8 @@
 - [ ] Enforce conservative enrichment rate and avoid provider bans
 - [ ] Test IMDb/TMDb mapping and episode SxxExx matching
 - [ ] Test GET, HEAD, Range/206, redirects, provider format variants
-- [ ] Harden outbound redirect policy and provider-bound traffic
+- [x] Reject unapproved upstream redirect hosts and HTTPS downgrades (unit-tested)
+- [ ] Validate real IPTV CDN allowlist and provider-bound egress traffic
 - [ ] Add rate limits and verify client IP filtering / network exposure
 - [ ] Check AIOStreams addon sorting and filters; maintain fallbacks
 - [ ] Integrate volume + `.env` into encrypted Backrest/restic/OneDrive snapshot

@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.1.1 — HomeDocker
+# Xtream VOD Bridge v0.1.2 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -114,9 +114,11 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 ## Safety, operation, backup, and rollback
 
 - **Deployment state:** a **prototype**, packaged/tested locally without real Xtream credentials, upstream network, or AIOStreams end-to-end integration. Test with one movie and one TV episode before production.
+- Provider redirects are refused unless they point to the Xtream host or hosts explicitly declared in `XTREAM_REDIRECT_ALLOWED_HOSTS` (comma-separated FQDNs). HTTPS provider redirects cannot downgrade to HTTP. For CDN-backed IPTV, approve only trusted CDN hostnames, never a wildcard.
+- An empty provider list response will preserve the existing index as an anti-data-loss safeguard. To intentionally clear an index, use an explicit maintenance procedure.
 - Provider credentials are held in `.env` in the Docker environment. Only host administrators with Docker permissions should access it; a person with Docker socket access can inspect environment variables. Do not publish the `.env` file or add it to Git.
 - An Xtream subscription may limit simultaneous connections or bind an IP; when using the byte-forwarding relay, the provider sees **HomeDocker's public egress IP**, not each remote device. Verify provider terms, rights, max sessions, and geographic limits.
-- Playback is **relayed through HomeDocker** (not transcoded); internet traffic and bandwidth flow through the home connection and Docker container. `Range`/`206` responses pass through. Some provider-specific redirects, HLS playlists, headers, token-based DRM, and exotic formats may require additional handling. HLS segment URL rewriting is **not** implemented in v0.1.1.
+- Playback is **relayed through HomeDocker** (not transcoded); internet traffic and bandwidth flow through the home connection and Docker container. `Range`/`206` responses pass through. Some provider-specific redirects (CDN hosts must be allowlisted), HLS playlists, headers, token-based DRM, and exotic formats may require additional handling. HLS segment URL rewriting is **not** implemented in v0.1.2.
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
@@ -139,7 +141,22 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 Repository: [`olivergiangvu/xtream-vod-bridge`](https://github.com/olivergiangvu/xtream-vod-bridge) (public source, **pre-production**). Public visibility does not make the streaming service safe to expose unauthenticated. This project does not ship provider playlists, credentials, stream URLs, or database exports. No open-source license has been granted yet; public visibility alone does not convey reuse rights. Default branch is `main`; require passing CI on pull requests where branch-protection features are available.
 
 - Develop on a short-lived branch and submit a pull request; avoid direct edits on `main`.
-- GitHub Actions runs syntax compilation and 6 offline unit tests; it does **not** call the IPTV provider, perform deployment, or pull secrets from HomeDocker.
+- GitHub Actions runs syntax compilation and offline unit + mocked API/relay integration tests; it does **not** call the IPTV provider, perform deployment, or pull secrets from HomeDocker.
 - `.env` and all provider credentials must remain only on HomeDocker, never inside GitHub, Actions logs or issue comments.
 - No automatic CD and no image publication in this prototype. Release tags and GitHub Container Registry should be added after integration tests and image reproducibility work.
 - Production checklist: see `docs/production-checklist.md`.
+
+### Local smoke check after deployment (no credentials displayed)
+
+The read-only `scripts/smoke_test.py` reads `ADDON_TOKEN` from local `.env` if
+necessary, then checks `/health`, `/manifest.json`, and optional mapped streams
+through `127.0.0.1:18767`. It never prints the manifest token or signed URLs.
+
+```bash
+python scripts/smoke_test.py --movie tt0133093 --episode tt7654321:1:2
+```
+
+Replace the test IDs with **actual matches from your authorized IPTV catalog**.
+This script validates index and stream URL contracts, not playback-byte delivery.
+For media playback, perform a separate controlled HEAD/Range test on a signed
+URL without pasting that URL into GitHub issues, CI logs, or shell history.

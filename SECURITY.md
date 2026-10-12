@@ -25,4 +25,4 @@ Raise security issues privately with the repository owner. Do not paste sensitiv
 
 ## Known pre-production gaps
 
-No tested protections against malicious/untrusted provider redirects, rate abuse of a publicly reachable streaming endpoint, or hostile playlist contents. No provider integration tests or reproducible dependency lock. Do not publish as an unrestricted Internet service before addressing these limitations.
+Unapproved provider redirects are rejected, and approved CDN redirects are host/port-restricted (mocked tests only). Remaining gaps: rate abuse of a publicly reachable streaming endpoint, DNS/egress policy for approved provider domains, hostile playlist contents, real provider integration tests, HLS playlist rewriting, and reproducible dependency lock. Do not publish as an unrestricted Internet service before addressing these limitations.

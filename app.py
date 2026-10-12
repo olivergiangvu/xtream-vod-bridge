@@ -10,14 +10,14 @@ import sqlite3
 import time
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -38,6 +38,10 @@ MAX_ENRICH = max(0, int(os.getenv("MAX_ENRICH_PER_SYNC", "250")))
 INFO_DAYS = max(1, int(os.getenv("REFRESH_INFO_DAYS", "30")))
 PLAY_HOURS = max(1, int(os.getenv("PLAY_URL_HOURS", "48")))
 MOVIES_ONLY = os.getenv("MOVIES_ONLY", "0") == "1"
+# Fail closed on redirects. Some providers use CDN redirects; explicitly allow
+# only approved CDN hostnames, not arbitrary targets supplied by the provider.
+REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
+                          os.getenv("XTREAM_REDIRECT_ALLOWED_HOSTS", "").split(",") if host.strip()}
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "index.sqlite"
 VALID_EXT = re.compile(r"^(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
@@ -214,12 +218,13 @@ def find_metadata(payload, kind):
         return None, None
     parts = [payload]
     parts += [payload[k] for k in ("info", "movie_data") if isinstance(payload.get(k), dict)]
+    imdb_id = tmdb_id = None
     for part in parts:
-        imdb_id = choose_imdb(part)
-        tmdb_id = choose_tmdb(part)
-        if imdb_id or tmdb_id:
-            return imdb_id, tmdb_id
-    return None, None
+        imdb_id = imdb_id or choose_imdb(part)
+        tmdb_id = tmdb_id or choose_tmdb(part)
+        if imdb_id and tmdb_id:
+            break
+    return imdb_id, tmdb_id
 
 
 def extract_episodes(info):
@@ -254,6 +259,12 @@ async def sync_lists():
         items = await xtream(action)
         if not isinstance(items, list):
             raise RuntimeError(f"Unexpected provider response for {action}")
+        # Several Xtream-compatible panels transiently return [] on failure.
+        # Never erase the entire indexed library on a single empty response.
+        if not items:
+            LOG.warning("Provider returned empty %s listing; preserving prior index", kind)
+            counts[kind] = 0
+            continue
         count = 0
         with db() as con:
             for item in items:
@@ -302,6 +313,8 @@ async def enrich_items():
                 imdb_id = await imdb_from_tmdb(kind, tmdb_id)
             movie_data = result.get("movie_data") or {}
             ext = extension(movie_data.get("container_extension") or row["extension"])
+            if kind == "series" and not isinstance(result.get("episodes"), dict):
+                raise RuntimeError("Series details missing episodes dictionary")
             episodes = extract_episodes(result) if kind == "series" else []
             with db() as con:
                 con.execute("UPDATE items SET tmdb_id=?, imdb_id=?, extension=?, checked_at=? "
@@ -481,6 +494,31 @@ def valid_signature(kind, sid, ext, exp, sig):
     return hmac.compare_digest(expected, sig or "")
 
 
+def make_stream_client():
+    return httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0), follow_redirects=False,
+                             limits=httpx.Limits(max_connections=10, max_keepalive_connections=4))
+
+
+def safe_redirect(target):
+    parsed = urlsplit(target)
+    source = urlsplit(BASE)
+    if parsed.username or parsed.password or not parsed.hostname or parsed.scheme not in ("http", "https"):
+        return False
+    # Never downgrade HTTPS provider to plain HTTP, including an allowed CDN.
+    if source.scheme == "https" and parsed.scheme != "https":
+        return False
+    host = parsed.hostname.lower()
+    if host == source.hostname.lower():
+        # Same-origin redirects may use the provider's configured port or the
+        # standard scheme port, but never arbitrary service ports.
+        scheme_port = 443 if parsed.scheme == "https" else 80
+        return parsed.port in (None, scheme_port, source.port)
+    # Explicitly allowed CDN redirects may only use default HTTP(S) ports.
+    if host in REDIRECT_ALLOWED_HOSTS:
+        return parsed.port in (None, 443 if parsed.scheme == "https" else 80)
+    return False
+
+
 @app.api_route("/play/{kind}/{sid}.{ext}", methods=["GET", "HEAD"])
 async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", sig: str = ""):
     if not valid_signature(kind, sid, ext, exp, sig):
@@ -499,11 +537,27 @@ async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", s
     if request.headers.get("range"):
         headers["Range"] = request.headers["range"]
     method = request.method
-    client = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0), follow_redirects=True,
-                               limits=httpx.Limits(max_connections=10, max_keepalive_connections=4))
+    client = make_stream_client()
     try:
-        upstream_req = client.build_request(method, url, headers=headers)
-        upstream = await client.send(upstream_req, stream=True)
+        # Redirects only to original provider host or explicitly approved CDN hosts.
+        # Never use automatic redirects with an untrusted Location target.
+        for redirect_count in range(4):
+            upstream_req = client.build_request(method, url, headers=headers)
+            upstream = await client.send(upstream_req, stream=True)
+            if upstream.status_code not in (301, 302, 303, 307, 308):
+                break
+            location = upstream.headers.get("location", "")
+            await upstream.aclose()
+            target = urljoin(url, location)
+            if not safe_redirect(target):
+                await client.aclose()
+                raise HTTPException(502, "Provider redirect not allowed")
+            if redirect_count == 3:
+                await client.aclose()
+                raise HTTPException(502, "Provider redirected too many times")
+            url = target
+    except HTTPException:
+        raise
     except Exception:
         await client.aclose()
         raise HTTPException(502, "Xtream stream unavailable")

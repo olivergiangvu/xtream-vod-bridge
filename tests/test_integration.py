@@ -1,0 +1,151 @@
+"""Mocked Xtream API -> SQLite -> Stremio HTTP -> signed playback relay contract tests.
+
+No live IPTV credentials, internet access, or HomeDocker deployment is used.
+"""
+import unittest
+from unittest.mock import AsyncMock, patch
+
+import httpx
+from fastapi.testclient import TestClient
+
+from test_bridge import bridge
+
+TOKEN = "a" * 40
+
+
+class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        bridge.init_db()
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            con.execute("DELETE FROM crosswalk")
+        self.client = TestClient(bridge.app)
+
+    async def test_full_xtream_movie_and_episode_to_stremio(self):
+        async def fake_xtream(action, **params):
+            fixtures = {
+                "get_vod_streams": [{"stream_id": 41, "name": "Example Film", "container_extension": "mkv", "tmdb": "603"}],
+                "get_series": [{"series_id": 58, "name": "Example Show"}],
+                "get_vod_info": {"info": {"imdb_id": "tt0133093"}, "movie_data": {"container_extension": "mkv"}},
+                "get_series_info": {"info": {"imdb_id": "tt7654321", "tmdb_id": "1399"}, "episodes": {
+                    "1": [{"id": "910", "episode_num": 2, "container_extension": "mp4", "title": "Episode 2"}]}},
+            }
+            return fixtures[action]
+
+        with patch.object(bridge, "xtream", new=fake_xtream), \
+             patch.object(bridge.asyncio, "sleep", new=AsyncMock()):
+            # Disable TMDb lookup: fixture already supplied IMDb IDs.
+            result = await bridge.sync_all()
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["lists"], {"movie": 1, "series": 1})
+        self.assertEqual(result["enriched"], 2)
+
+        manifest = self.client.get(f"/a/{TOKEN}/manifest.json")
+        self.assertEqual(manifest.status_code, 200)
+        self.assertEqual(manifest.json()["resources"], ["stream"])
+        self.assertEqual(manifest.json()["types"], ["movie", "series"])
+        movie = self.client.get(f"/a/{TOKEN}/stream/movie/tt0133093.json")
+        self.assertEqual(movie.status_code, 200)
+        self.assertEqual(len(movie.json()["streams"]), 1)
+        self.assertIn("/play/movie/41.mkv", movie.json()["streams"][0]["url"])
+        self.assertNotIn("/movie/example/example/", movie.text)
+        self.assertNotIn("username=", movie.text)
+        episode = self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:2.json")
+        self.assertEqual(episode.status_code, 200)
+        self.assertIn("/play/series/910.mp4", episode.json()["streams"][0]["url"])
+        self.assertEqual(self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:3.json").json(), {"streams": []})
+        self.assertEqual(self.client.get("/a/invalid/manifest.json").status_code, 404)
+
+    async def test_signed_playback_range_head_and_tampering(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('movie',45,'Fake Film','mp4')")
+        calls = []
+
+        def playback(request):
+            calls.append(request)
+            if request.method == "HEAD":
+                return httpx.Response(200, headers={"Content-Type": "video/mp4", "Content-Length": "6"})
+            if request.headers.get("Range") == "bytes=2-4":
+                return httpx.Response(206, content=b"cde", headers={"Content-Range": "bytes 2-4/6", "Content-Length": "3"})
+            return httpx.Response(200, content=b"abcdef", headers={"Content-Type": "video/mp4"})
+
+        def factory():
+            return httpx.AsyncClient(transport=httpx.MockTransport(playback), follow_redirects=False)
+
+        url = bridge.signed_url("movie", 45, "mp4")
+        suffix = url[len(bridge.PUBLIC):]
+        with patch.object(bridge, "make_stream_client", factory):
+            get = self.client.get(suffix, headers={"Range": "bytes=2-4"})
+            self.assertEqual(get.status_code, 206)
+            self.assertEqual(get.content, b"cde")
+            self.assertEqual(get.headers["Content-Range"], "bytes 2-4/6")
+            self.assertEqual(get.headers["Cache-Control"], "private, no-store")
+            head = self.client.head(suffix)
+            self.assertEqual(head.status_code, 200)
+            self.assertEqual(head.content, b"")
+            self.assertEqual(head.headers["content-length"], "6")
+        self.assertEqual([r.method for r in calls], ["GET", "HEAD"])
+        self.assertIn("/movie/example/example/45.mp4", str(calls[0].url))
+        self.assertEqual(self.client.get(suffix.replace("sig=", "sig=bad")).status_code, 403)
+        self.assertEqual(self.client.get(suffix.replace("/45.mp4", "/46.mp4")).status_code, 403)
+
+    async def test_unsafe_redirect_blocked_and_approved_cdn_follows(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('movie',46,'Fake Film','mp4')")
+        suffix = bridge.signed_url("movie", 46, "mp4")[len(bridge.PUBLIC):]
+
+        def evil(request):
+            return httpx.Response(302, headers={"Location": "http://127.0.0.1:8000/private"})
+
+        with patch.object(bridge, "make_stream_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(evil))):
+            res = self.client.get(suffix)
+        self.assertEqual(res.status_code, 502)
+
+        seen = []
+
+        def cdn(request):
+            seen.append(str(request.url))
+            if request.url.host == "example.invalid":
+                return httpx.Response(302, headers={"Location": "https://cdn.example.invalid/asset.mp4"})
+            return httpx.Response(200, content=b"stream-bytes")
+
+        with patch.object(bridge, "REDIRECT_ALLOWED_HOSTS", {"cdn.example.invalid"}), \
+             patch.object(bridge, "make_stream_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(cdn))):
+            res = self.client.get(suffix)
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.content, b"stream-bytes")
+        self.assertEqual(len(seen), 2)
+        self.assertNotIn("/movie/example/example/", seen[1])
+        self.assertFalse(bridge.safe_redirect("file:///etc/passwd"))
+        self.assertFalse(bridge.safe_redirect("https://user:pass@cdn.example.invalid/a"))
+        self.assertFalse(bridge.safe_redirect("http://cdn.example.invalid/a"))
+        self.assertFalse(bridge.safe_redirect("https://cdn.example.invalid:22/a"))
+        self.assertFalse(bridge.safe_redirect("https://example.invalid:22/admin"))
+
+    async def test_transient_empty_listing_does_not_delete_index(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension,last_seen) VALUES ('movie',7,'Preserved','mp4',1)")
+        with patch.object(bridge, "xtream", new=AsyncMock(return_value=[])):
+            counts = await bridge.sync_lists()
+        self.assertEqual(counts["movie"], 0)
+        with bridge.db() as con:
+            self.assertEqual(con.execute("SELECT count(*) FROM items WHERE item_id=7").fetchone()[0], 1)
+
+    async def test_metadata_ids_merge_from_nested_fields(self):
+        imdb, tmdb = bridge.find_metadata({"imdb_id": "tt0133093", "info": {"tmdb_id": "603"}}, "movie")
+        self.assertEqual((imdb, tmdb), ("tt0133093", "603"))
+
+    async def test_bad_series_detail_preserves_episode_data(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('series',88,'Example Show','mp4')")
+            con.execute("INSERT INTO episodes(series_id,season,episode,stream_id,extension) VALUES (88,1,1,777,'mkv')")
+        with patch.object(bridge, "xtream", new=AsyncMock(return_value={"info": {"imdb_id": "tt7654321"}})):
+            await bridge.enrich_items()
+        with bridge.db() as con:
+            count = con.execute("SELECT count(*) FROM episodes WHERE stream_id=777").fetchone()[0]
+        self.assertEqual(count, 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
