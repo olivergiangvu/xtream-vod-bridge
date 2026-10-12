@@ -1,0 +1,36 @@
+name: Bootstrap reviewed source
+on:
+  push:
+    paths: ['.bootstrap-source.tar.xz.b64']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  import:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Verify and extract initial public source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, pathlib
+          src=pathlib.Path('.bootstrap-source.tar.xz.b64')
+          raw=base64.b64decode(src.read_text())
+          expected='8bfb445250e4c0c47002ee46c052a959436aac0081235056539e76d05cb551b5'
+          if hashlib.sha256(raw).hexdigest()!=expected:
+              raise SystemExit('Source SHA256 mismatch — aborting')
+          pathlib.Path('/tmp/xtream-source.tar.xz').write_bytes(raw)
+          PY
+          tar -tJf /tmp/xtream-source.tar.xz | grep -vE '^[A-Za-z0-9._/-]+$' && exit 1 || true
+          tar -xJf /tmp/xtream-source.tar.xz
+          rm -f .bootstrap-source.tar.xz.b64 .github/workflows/bootstrap.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: import Xtream VOD Bridge v0.1.1 public source' || exit 0
+          git push origin HEAD:main
