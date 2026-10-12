@@ -36,7 +36,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         stream = result["streams"][0]
         self.assertIn("/play/movie/17/tt1234567/", stream["url"])
         self.assertNotIn("example:example", stream["url"])
-        self.assertIn("A Test Movie", stream["behaviorHints"]["filename"])
+        self.assertIn("A.Test.Movie", stream["behaviorHints"]["filename"])
 
     async def test_series_episode(self):
         with bridge.db() as con:
