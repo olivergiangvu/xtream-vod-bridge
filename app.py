@@ -19,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -37,6 +37,11 @@ SECRET = os.getenv("PLAYBACK_SECRET", "")
 TMDB_KEY = os.getenv("TMDB_API_KEY", "")
 SYNC_HOURS = max(1, int(os.getenv("SYNC_HOURS", "6")))
 MAX_ENRICH = max(0, int(os.getenv("MAX_ENRICH_PER_SYNC", "250")))
+SERIES_SYNC_QUOTA = max(0, int(os.getenv("SERIES_ENRICH_PER_SYNC", "40")))
+SERIES_BOOTSTRAP_BATCH = max(0, int(os.getenv("SERIES_BOOTSTRAP_BATCH", "0")))
+SERIES_BOOTSTRAP_INTERVAL_MINUTES = max(
+    15, int(os.getenv("SERIES_BOOTSTRAP_INTERVAL_MINUTES", "30"))
+)
 INFO_DAYS = max(1, int(os.getenv("REFRESH_INFO_DAYS", "30")))
 PLAY_HOURS = max(1, int(os.getenv("PLAY_URL_HOURS", "48")))
 MOVIES_ONLY = os.getenv("MOVIES_ONLY", "0") == "1"
@@ -62,7 +67,10 @@ MEDIA_KEY = re.compile(r"^(?:tt\d{7,10}|tmdb-(?:movie|tv)-\d+|(?:anilist|kitsu|m
 FILENAME = re.compile(r"^[\w.-]{1,200}\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
 ANIME_COLUMNS = {"anilist": "anilist_id", "kitsu": "kitsu_id", "mal": "mal_id"}
 
-LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None}
+LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None,
+            "series_enriched_last_sync": 0, "movie_enriched_last_sync": 0,
+            "series_bootstrap_last_run": None, "series_bootstrap_last_enriched": 0,
+            "series_bootstrap_last_error": None}
 LOCK = asyncio.Lock()
 
 
@@ -411,11 +419,39 @@ async def sync_lists():
     return counts
 
 
-async def enrich_items():
+def pending_count(kind):
+    """Persisted checkpoint: count rows requiring first/detail enrichment."""
+    if kind not in ("movie", "series"):
+        raise ValueError("Unsupported item kind")
     threshold = int(time.time()) - INFO_DAYS * 86400
     with db() as con:
-        pending = con.execute("SELECT * FROM items WHERE checked_at < ? ORDER BY checked_at ASC LIMIT ?",
-                              (threshold, MAX_ENRICH)).fetchall()
+        return con.execute(
+            "SELECT COUNT(*) FROM items WHERE kind=? AND checked_at < ?",
+            (kind, threshold),
+        ).fetchone()[0]
+
+
+async def enrich_items(kind=None, limit=None):
+    """Bounded, sequential detail calls. checked_at is the SQLite resume cursor."""
+    threshold = int(time.time()) - INFO_DAYS * 86400
+    budget = MAX_ENRICH if limit is None else max(0, int(limit))
+    if budget == 0:
+        return 0
+    with db() as con:
+        if kind is None:
+            pending = con.execute(
+                "SELECT * FROM items WHERE checked_at < ? "
+                "ORDER BY checked_at ASC, item_id ASC LIMIT ?",
+                (threshold, budget),
+            ).fetchall()
+        elif kind in ("movie", "series"):
+            pending = con.execute(
+                "SELECT * FROM items WHERE kind=? AND checked_at < ? "
+                "ORDER BY checked_at ASC, item_id ASC LIMIT ?",
+                (kind, threshold, budget),
+            ).fetchall()
+        else:
+            raise ValueError("Unsupported item kind")
     count = 0
     for row in pending:
         kind, item_id = row["kind"], row["item_id"]
@@ -467,15 +503,53 @@ async def sync_all():
     async with LOCK:
         try:
             lists = await sync_lists()
-            enriched = await enrich_items()
+            if MOVIES_ONLY:
+                series_budget = 0
+            else:
+                # Avoid starvation: always reserve Series detail requests first,
+                # while keeping the original total MAX_ENRICH cap unchanged.
+                series_budget = min(MAX_ENRICH, SERIES_SYNC_QUOTA, pending_count("series"))
+            series_enriched = await enrich_items(kind="series", limit=series_budget)
+            movie_enriched = await enrich_items(kind="movie", limit=MAX_ENRICH - series_budget)
+            enriched = series_enriched + movie_enriched
+            LAST_RUN["movie_enriched_last_sync"] = movie_enriched
+            LAST_RUN["series_enriched_last_sync"] = series_enriched
+            LAST_RUN["enriched"] = enriched
             LAST_RUN["last_error"] = None
-            return {"status": "ok", "lists": lists, "enriched": enriched}
+            return {"status": "ok", "lists": lists, "enriched": enriched,
+                    "movie_enriched": movie_enriched, "series_enriched": series_enriched}
         except Exception as exc:
             # Exception messages from HTTP clients may contain credential-bearing URLs.
             # Never surface those in /health or persistent logs.
             LAST_RUN["last_error"] = type(exc).__name__
             LOG.error("Sync failed: %s", type(exc).__name__)
             return {"status": "error", "error": "Check server logs; provider may be unavailable"}
+
+
+async def series_bootstrap_loop():
+    """Opt-in series-only bootstrap batches, serialized with scheduled sync."""
+    # Initial list sync creates the Series rows. LOCK prevents overlapping API
+    # detail calls with regular refresh and avoids concurrent DB writes.
+    await asyncio.sleep(60)
+    while True:
+        try:
+            async with LOCK:
+                if pending_count("series"):
+                    enriched = await enrich_items(
+                        kind="series", limit=SERIES_BOOTSTRAP_BATCH)
+                else:
+                    enriched = 0
+                LAST_RUN["series_bootstrap_last_run"] = int(time.time())
+                LAST_RUN["series_bootstrap_last_enriched"] = enriched
+                LAST_RUN["series_bootstrap_last_error"] = None
+                LOG.info("Series bootstrap enriched=%s batch_limit=%s",
+                         enriched, SERIES_BOOTSTRAP_BATCH)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            LAST_RUN["series_bootstrap_last_error"] = type(exc).__name__
+            LOG.error("Series bootstrap error=%s", type(exc).__name__)
+        await asyncio.sleep(SERIES_BOOTSTRAP_INTERVAL_MINUTES * 60)
 
 
 async def loop():
@@ -495,14 +569,20 @@ async def lifespan(_app):
     check_settings()
     init_db()
     task = asyncio.create_task(loop())
+    bootstrap = (asyncio.create_task(series_bootstrap_loop())
+                 if not MOVIES_ONLY and SERIES_BOOTSTRAP_BATCH > 0 else None)
     try:
         yield
     finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for running in (task, bootstrap):
+            if running:
+                running.cancel()
+        for running in (task, bootstrap):
+            if running:
+                try:
+                    await running
+                except asyncio.CancelledError:
+                    pass
 
 
 app = FastAPI(title="Xtream VOD Bridge", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -517,9 +597,27 @@ async def health():
                                       "SUM(CASE WHEN imdb_id IS NOT NULL OR tmdb_id IS NOT NULL "
                                       "THEN 1 ELSE 0 END) AS mapped FROM items GROUP BY kind")}
         episode_count = con.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
+        series_with_episodes = con.execute(
+            "SELECT COUNT(DISTINCT series_id) FROM episodes").fetchone()[0]
+        series_checked = con.execute(
+            "SELECT COUNT(*) FROM items WHERE kind='series' AND checked_at > 0").fetchone()[0]
+        series_pending = con.execute(
+            "SELECT COUNT(*) FROM items WHERE kind='series' AND checked_at < ?",
+            (int(time.time()) - INFO_DAYS * 86400,)
+        ).fetchone()[0]
     return {"status": "ok", "version": VERSION, "last_sync": LAST_RUN["list_sync"],
             "enriched_last_sync": LAST_RUN["enriched"], "last_error": LAST_RUN["last_error"],
-            "index": stats, "episodes": episode_count}
+            "index": stats, "episodes": episode_count,
+            "series_progress": {"details_checked": series_checked,
+                                "with_episodes": series_with_episodes,
+                                "pending_enrichment": series_pending,
+                                "batch_size": SERIES_BOOTSTRAP_BATCH,
+                                "batch_interval_minutes": SERIES_BOOTSTRAP_INTERVAL_MINUTES,
+                                "last_bootstrap": LAST_RUN["series_bootstrap_last_run"],
+                                "last_batch_enriched": LAST_RUN["series_bootstrap_last_enriched"],
+                                "last_batch_error": LAST_RUN["series_bootstrap_last_error"],
+                                "series_enriched_last_sync": LAST_RUN["series_enriched_last_sync"],
+                                "movie_enriched_last_sync": LAST_RUN["movie_enriched_last_sync"]}}
 
 
 @app.post("/admin/refresh")
