@@ -27,8 +27,8 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             fixtures = {
                 "get_vod_streams": [{"stream_id": 41, "name": "Example Film", "container_extension": "mkv", "tmdb": "603"}],
                 "get_series": [{"series_id": 58, "name": "Example Show"}],
-                "get_vod_info": {"info": {"imdb_id": "tt0133093"}, "movie_data": {"container_extension": "mkv"}},
-                "get_series_info": {"info": {"imdb_id": "tt7654321", "tmdb_id": "1399"}, "episodes": {
+                "get_vod_info": {"info": {"imdb_id": "tt0133093", "anilist_id": "7777"}, "movie_data": {"container_extension": "mkv"}},
+                "get_series_info": {"info": {"imdb_id": "tt7654321", "tmdb_id": "1399", "kitsu_id": "8888"}, "episodes": {
                     "1": [{"id": "910", "episode_num": 2, "container_extension": "mp4", "title": "Episode 2"}]}},
             }
             return fixtures[action]
@@ -48,12 +48,20 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
         movie = self.client.get(f"/a/{TOKEN}/stream/movie/tt0133093.json")
         self.assertEqual(movie.status_code, 200)
         self.assertEqual(len(movie.json()["streams"]), 1)
-        self.assertIn("/play/movie/41.mkv", movie.json()["streams"][0]["url"])
+        self.assertIn("/play/movie/41/tt0133093/", movie.json()["streams"][0]["url"])
+        self.assertTrue(movie.json()["streams"][0]["url"].endswith("/Example.Film.mkv"))
+        self.assertEqual(movie.json()["streams"][0]["behaviorHints"]["filename"], "Example.Film.mkv")
+        self.assertNotIn("?exp=", movie.json()["streams"][0]["url"])
+        self.assertEqual(len(self.client.get(f"/a/{TOKEN}/stream/movie/anilist:7777.json").json()["streams"]), 1)
         self.assertNotIn("/movie/example/example/", movie.text)
         self.assertNotIn("username=", movie.text)
         episode = self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:2.json")
         self.assertEqual(episode.status_code, 200)
-        self.assertIn("/play/series/910.mp4", episode.json()["streams"][0]["url"])
+        self.assertIn("/play/series/910/tt7654321/", episode.json()["streams"][0]["url"])
+        self.assertTrue(episode.json()["streams"][0]["url"].endswith("/Example.Show.S01E02.mp4"))
+        self.assertEqual(episode.json()["streams"][0]["behaviorHints"]["filename"], "Example.Show.S01E02.mp4")
+        self.assertEqual(len(self.client.get(f"/a/{TOKEN}/stream/series/kitsu:8888:1:2.json").json()["streams"]), 1)
+        self.assertEqual(len(self.client.get(f"/a/{TOKEN}/stream/series/tmdb:tv:1399:1:2.json").json()["streams"]), 1)
         self.assertEqual(self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:3.json").json(), {"streams": []})
         self.assertEqual(self.client.get("/a/invalid/manifest.json").status_code, 404)
 
@@ -177,6 +185,64 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ):
                 with self.subTest(target=target):
                     self.assertFalse(bridge.safe_redirect(target))
+
+
+    async def test_named_playback_https_filename_signature_and_range(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('movie',48,'Zootopia 2 (2025)','mkv','tt1234567')")
+        filename = bridge.friendly_filename("Zootopia 2 (2025)", "movie", "mkv")
+        url = bridge.signed_url("movie", 48, "mkv",
+                                filename=filename, identity="tt1234567")
+        self.assertTrue(url.endswith("/Zootopia.2.2025.mkv"))
+        self.assertNotIn("?", url)
+        self.assertTrue(bridge.valid_named_signature("movie", 48, "tt1234567",
+            url.split("/")[-3], url.split("/")[-2], filename))
+        suffix = url[len(bridge.PUBLIC):]
+
+        def playback(request):
+            if request.method == "HEAD":
+                return httpx.Response(200, headers={"Content-Type": "video/x-matroska"})
+            return httpx.Response(206, content=b"abcd",
+                                  headers={"Content-Range": "bytes 0-3/90"})
+        factory = lambda: httpx.AsyncClient(transport=httpx.MockTransport(playback))
+        with patch.object(bridge, "make_stream_client", factory):
+            res = self.client.get(suffix, headers={"Range": "bytes=0-3"})
+            self.assertEqual(res.status_code, 206)
+            self.assertEqual(res.content, b"abcd")
+            self.assertIn("Zootopia.2.2025.mkv", res.headers["content-disposition"])
+            head = self.client.head(suffix)
+            self.assertEqual(head.status_code, 200)
+            self.assertEqual(head.content, b"")
+            self.assertEqual(self.client.get(suffix.replace("Zootopia.", "Fake.")).status_code, 403)
+            self.assertEqual(self.client.get(suffix.replace("/tt1234567/", "/tt7654321/")).status_code, 403)
+
+    async def test_dynamic_public_ipv4_http_redirect_still_blocks_private_network(self):
+        with (patch.object(bridge, "HTTP_REDIRECT_MODE", "public-ip"),
+              patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", set())):
+            self.assertTrue(bridge.safe_redirect("http://1.1.1.1/video/file.mkv"))
+            self.assertFalse(bridge.safe_redirect("http://1.1.1.1:8080/video/file.mkv"))
+            self.assertFalse(bridge.safe_redirect("http://127.0.0.1/file.mkv"))
+            self.assertFalse(bridge.safe_redirect("http://192.168.50.153/file.mkv"))
+            self.assertFalse(bridge.safe_redirect("http://169.254.169.254/latest/meta-data/"))
+            self.assertFalse(bridge.safe_redirect("http://public.example.org/asset.mkv"))
+            self.assertFalse(bridge.safe_redirect("file:///etc/passwd"))
+        with (patch.object(bridge, "HTTP_REDIRECT_MODE", "allowlist"),
+              patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", set())):
+            self.assertFalse(bridge.safe_redirect("http://1.1.1.1/video/file.mkv"))
+
+    async def test_anime_metadata_migration_episode_zero_and_flat_list(self):
+        with bridge.db() as con:
+            for col in ("anilist_id", "kitsu_id", "mal_id"):
+                self.assertIn(col, [r["name"] for r in con.execute("PRAGMA table_info(items)")])
+        ids = bridge.find_anime_ids({"info": {"mal_id": "123", "kitsu_id": 456}})
+        self.assertEqual(ids, {"mal_id": "123", "kitsu_id": "456"})
+        episodes = bridge.extract_episodes({
+            "episodes": [{"season_number": 0, "episode_number": 1,
+                          "stream_id": 998, "container_extension": "mkv", "title": "Special"}]})
+        self.assertEqual(episodes[0][:4], (0, 1, 998, "mkv"))
+        self.assertEqual(bridge.friendly_filename("アニメ", "series", "mkv", 1, 2),
+                         "アニメ.S01E02.mkv")
 
     async def test_transient_empty_listing_does_not_delete_index(self):
         with bridge.db() as con:
