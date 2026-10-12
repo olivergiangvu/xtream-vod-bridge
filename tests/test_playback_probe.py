@@ -43,5 +43,47 @@ class PlaybackPathTests(unittest.TestCase):
                     probe.playback_path(url, self.base)
 
 
+class ReadinessWaitTests(unittest.TestCase):
+    def test_transient_502_then_200(self):
+        responses = iter((502, 503, 200))
+        delays = []
+        result = probe.wait_for_health(
+            lambda: next(responses), attempts=4,
+            pause_seconds=1, sleeper=delays.append,
+        )
+        self.assertEqual(result, (200, 3))
+        self.assertEqual(delays, [1, 1])
+
+    def test_denied_health_returns_immediately(self):
+        delays = []
+        result = probe.wait_for_health(
+            lambda: 403, attempts=10,
+            sleeper=delays.append,
+        )
+        self.assertEqual(result, (403, 1))
+        self.assertEqual(delays, [])
+
+    def test_backend_unavailable_is_bounded(self):
+        result = probe.wait_for_health(
+            lambda: 502, attempts=3,
+            sleeper=lambda _: None,
+        )
+        self.assertEqual(result, (502, 3))
+
+    def test_connection_refused_then_healthy(self):
+        responses = iter((ConnectionRefusedError(), 200))
+
+        def checker():
+            status = next(responses)
+            if isinstance(status, Exception):
+                raise status
+            return status
+
+        result = probe.wait_for_health(
+            checker, attempts=3, sleeper=lambda _: None
+        )
+        self.assertEqual(result, (200, 2))
+
+
 if __name__ == "__main__":
     unittest.main()
