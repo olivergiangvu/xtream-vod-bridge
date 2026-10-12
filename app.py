@@ -294,8 +294,9 @@ def quality_hint(*names):
         for tags, label in (
             (("4K", "UHD"), "2160p"),
             (("FHD",), "1080p"),
-            (("HD",), "720p"),
-            (("SD",), "480p"),
+            # Bare HD/SD do not prove an exact pixel resolution.
+            (("HD",), "HD"),
+            (("SD",), "SD"),
         ):
             if any(re.search(r"(?<!\w)" + tag + r"(?!\w)", text, re.I) for tag in tags):
                 return label
@@ -308,7 +309,7 @@ def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
     text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|SD|1080P|2160P|720P|480P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
     # A suffix like "(4K)" or "[2160p]" is a source property, not film title.
-    text = re.sub(r"(?:\s*[\[(](?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P)[\])])+$", "", text, flags=re.I)
+    text = re.sub(r"(?:\s*[\[(](?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P)[\])]|[\s._-]+(?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P))+$", "", text, flags=re.I)
     text = re.sub(r"[^\w]+", ".", text, flags=re.UNICODE).strip(".")
     text = text[:140].rstrip(".") or "Media"
     if kind == "series":
