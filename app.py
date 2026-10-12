@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -18,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -47,12 +48,20 @@ REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
 # This is explicitly distinct from the HTTPS redirect allowlist.
 HTTP_REDIRECT_ALLOWED_IPS = {ip.strip() for ip in
                              os.getenv("XTREAM_HTTP_REDIRECT_ALLOWED_IPS", "").split(",") if ip.strip()}
+# Explicit opt-in; no fixed CDN IP maintenance needed when the provider
+# redirects to rotating public IPv4 addresses. Private IPs remain blocked.
+HTTP_REDIRECT_MODE = os.getenv("XTREAM_HTTP_REDIRECT_MODE", "allowlist").strip().lower()
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "index.sqlite"
 VALID_EXT = re.compile(r"^(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
 VALID_ID = re.compile(r"^tt\d{7,10}$")
 STREAM_REQUEST = re.compile(r"^(tt\d{7,10})(?::(\d+):(\d+))?$")
 TMDB_REQUEST = re.compile(r"^tmdb:(?:(?:movie|tv|series):)?(\d+)(?::(\d+):(\d+))?$")
+ANIME_REQUEST = re.compile(r"^(anilist|kitsu|mal):(\d+)(?::(\d+):(\d+))?$")
+MEDIA_KEY = re.compile(r"^(?:tt\d{7,10}|tmdb-(?:movie|tv)-\d+|(?:anilist|kitsu|mal)-\d+)$")
+FILENAME = re.compile(r"^[\w.-]{1,200}\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
+ANIME_COLUMNS = {"anilist": "anilist_id", "kitsu": "kitsu_id", "mal": "mal_id"}
+
 LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None}
 LOCK = asyncio.Lock()
 
@@ -73,12 +82,15 @@ def check_settings():
             raise RuntimeError(f"{key} requires at least 32 random characters")
     if len({ADDON_TOKEN, ADMIN_TOKEN, SECRET}) < 3:
         raise RuntimeError("Each secret must be different")
+    if HTTP_REDIRECT_MODE not in ("allowlist", "public-ip"):
+        raise RuntimeError("XTREAM_HTTP_REDIRECT_MODE must be allowlist or public-ip")
     for value in HTTP_REDIRECT_ALLOWED_IPS:
         try:
             address = ipaddress.ip_address(value)
         except ValueError as exc:
             raise RuntimeError("HTTP redirect allowlist requires public IPv4 addresses") from exc
-        if not isinstance(address, ipaddress.IPv4Address) or not address.is_global or value != str(address):
+        if (not isinstance(address, ipaddress.IPv4Address) or not address.is_global
+                or address.is_multicast or address.is_reserved or value != str(address)):
             raise RuntimeError("HTTP redirect allowlist requires canonical public IPv4 addresses")
 
 
@@ -127,6 +139,12 @@ def init_db():
           PRIMARY KEY(kind, imdb_id)
         );
         """)
+        # Non-destructive additive migration; retains all indexed movies/episodes.
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+        for column in ANIME_COLUMNS.values():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column} ON items(kind, {column})")
 
 
 def clean_id(value):
@@ -239,23 +257,78 @@ def find_metadata(payload, kind):
     return imdb_id, tmdb_id
 
 
+def find_anime_ids(payload):
+    """Only use IDs provided by the Xtream data, never infer from titles."""
+    result = {}
+    if not isinstance(payload, dict):
+        return result
+    parts = [payload]
+    parts += [payload[k] for k in ("info", "movie_data") if isinstance(payload.get(k), dict)]
+    candidates = {
+        "anilist_id": ("anilist_id", "anilist", "anilistId"),
+        "kitsu_id": ("kitsu_id", "kitsu", "kitsuId"),
+        "mal_id": ("mal_id", "myanimelist_id", "mal", "malId"),
+    }
+    for part in parts:
+        for column, aliases in candidates.items():
+            if column not in result:
+                for alias in aliases:
+                    value = clean_id(part.get(alias))
+                    if value:
+                        result[column] = value
+                        break
+    return result
+
+
+def friendly_filename(name, kind, ext, season=None, episode=None):
+    """Clean UTF-8 basename is the last URL component for mpv/metadata scrapers."""
+    text = unicodedata.normalize("NFKC", str(name or "Media"))
+    text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
+    text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|1080P|2160P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
+    text = re.sub(r"[^\w]+", ".", text, flags=re.UNICODE).strip(".")
+    text = text[:145].rstrip(".") or "Media"
+    if kind == "series":
+        text += f".S{int(season):02d}E{int(episode):02d}"
+    return f"{text}.{ext}"
+
+
+def media_key(row, kind, requested=None):
+    imdb = row["imdb_id"]
+    if imdb:
+        return imdb
+    tmdb_id = row["tmdb_id"]
+    if tmdb_id:
+        return f"tmdb-{'movie' if kind == 'movie' else 'tv'}-{tmdb_id}"
+    for name, col in ANIME_COLUMNS.items():
+        if row[col]:
+            return f"{name}-{row[col]}"
+    return requested or "unknown"
+
+
 def extract_episodes(info):
     epmap = info.get("episodes") if isinstance(info, dict) else None
-    if not isinstance(epmap, dict):
+    if isinstance(epmap, dict):
+        seasons = epmap.items()
+    elif isinstance(epmap, list):
+        seasons = [(None, epmap)]
+    else:
         return []
     results = []
-    for season_key, entries in epmap.items():
-        season = safe_int(season_key)
-        # Season 0 specials can be supported by Xtream, and Stremio uses season 0.
-        if str(season_key).strip() == "0":
-            season = 0
-        if season is None or not isinstance(entries, list):
+    for season_key, entries in seasons:
+        if not isinstance(entries, list):
             continue
         for raw in entries:
             if not isinstance(raw, dict):
                 continue
-            episode = safe_int(raw.get("episode_num"))
-            stream_id = safe_int(raw.get("id"))
+            raw_season = season_key if season_key is not None else raw.get("season") or raw.get("season_number", 1)
+            try:
+                season = int(raw_season)
+            except (TypeError, ValueError):
+                continue
+            if season < 0:
+                continue
+            episode = safe_int(raw.get("episode_num") or raw.get("episode_number") or raw.get("number"))
+            stream_id = safe_int(raw.get("id") or raw.get("stream_id"))
             if episode and stream_id:
                 results.append((season, episode, stream_id, extension(raw.get("container_extension")), str(raw.get("title") or "")))
     return results
@@ -286,14 +359,20 @@ async def sync_lists():
                 if not item_id:
                     continue
                 imdb_id, tmdb_id = find_metadata(item, kind)
-                con.execute("""INSERT INTO items(kind,item_id,name,extension,tmdb_id,imdb_id,last_seen)
-                    VALUES(?,?,?,?,?,?,?) ON CONFLICT(kind,item_id) DO UPDATE SET
+                anime = find_anime_ids(item)
+                con.execute("""INSERT INTO items(kind,item_id,name,extension,tmdb_id,imdb_id,
+                    anilist_id,kitsu_id,mal_id,last_seen)
+                    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(kind,item_id) DO UPDATE SET
                       name=excluded.name, extension=excluded.extension,
                       tmdb_id=COALESCE(excluded.tmdb_id, items.tmdb_id),
                       imdb_id=COALESCE(excluded.imdb_id, items.imdb_id),
+                      anilist_id=COALESCE(excluded.anilist_id, items.anilist_id),
+                      kitsu_id=COALESCE(excluded.kitsu_id, items.kitsu_id),
+                      mal_id=COALESCE(excluded.mal_id, items.mal_id),
                       last_seen=excluded.last_seen""",
                     (kind, item_id, str(item.get("name") or item.get("title") or ""),
-                     extension(item.get("container_extension")), tmdb_id, imdb_id, now))
+                     extension(item.get("container_extension")), tmdb_id, imdb_id,
+                     anime.get("anilist_id"), anime.get("kitsu_id"), anime.get("mal_id"), now))
                 count += 1
             # Prune only on a successfully completed listing fetch.
             ids = con.execute("SELECT item_id FROM items WHERE kind=? AND last_seen < ?", (kind, now)).fetchall()
@@ -325,13 +404,19 @@ async def enrich_items():
                 imdb_id = await imdb_from_tmdb(kind, tmdb_id)
             movie_data = result.get("movie_data") or {}
             ext = extension(movie_data.get("container_extension") or row["extension"])
-            if kind == "series" and not isinstance(result.get("episodes"), dict):
-                raise RuntimeError("Series details missing episodes dictionary")
+            anime_info = find_anime_ids(result)
+            if kind == "series" and not isinstance(result.get("episodes"), (dict, list)):
+                raise RuntimeError("Series details missing episodes mapping")
             episodes = extract_episodes(result) if kind == "series" else []
             with db() as con:
-                con.execute("UPDATE items SET tmdb_id=?, imdb_id=?, extension=?, checked_at=? "
+                con.execute("UPDATE items SET tmdb_id=?, imdb_id=?, extension=?, "
+                            "anilist_id=?, kitsu_id=?, mal_id=?, checked_at=? "
                             "WHERE kind=? AND item_id=?",
-                            (tmdb_id, imdb_id, ext, int(time.time()), kind, item_id))
+                            (tmdb_id, imdb_id, ext,
+                             anime_info.get("anilist_id") or row["anilist_id"],
+                             anime_info.get("kitsu_id") or row["kitsu_id"],
+                             anime_info.get("mal_id") or row["mal_id"],
+                             int(time.time()), kind, item_id))
                 if kind == "series":
                     con.execute("DELETE FROM episodes WHERE series_id=?", (item_id,))
                     con.executemany("INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
@@ -428,18 +513,29 @@ async def manifest(token: str):
     return {"id": "org.homedocker.xtreamvod", "version": VERSION,
             "name": "Xtream VOD Bridge", "description": "Private Xtream VOD HTTP streams by verified IMDb/TMDb IDs",
             "resources": ["stream"], "types": ["movie"] if MOVIES_ONLY else ["movie", "series"],
-            "catalogs": [], "idPrefixes": ["tt", "tmdb:"]}
+            "catalogs": [], "idPrefixes": ["tt", "tmdb:", "anilist:", "kitsu:", "mal:"]}
 
 
-def signed_url(kind, stream_id, ext):
+def signed_url(kind, stream_id, ext, *, filename=None, identity=None):
+    """New URLs end with the real media filename; legacy links still work."""
     expiry = int(time.time()) + PLAY_HOURS * 3600
+    if filename and identity:
+        mac = hmac.new(SECRET.encode(),
+                       f"v2:{kind}:{stream_id}:{identity}:{expiry}:{filename}".encode(),
+                       hashlib.sha256).hexdigest()
+        return PUBLIC + f"/play/{kind}/{stream_id}/{identity}/{expiry}/{mac}/" + quote(filename, safe="")
+    # Legacy query-signature form remains valid for already issued links.
     path = f"/play/{kind}/{stream_id}.{ext}"
     mac = hmac.new(SECRET.encode(), f"{path}:{expiry}".encode(), hashlib.sha256).hexdigest()
     return PUBLIC + path + "?" + urlencode({"exp": expiry, "sig": mac})
 
 
-def records_for(kind, imdb_id, tmdb_id):
+def records_for(kind, imdb_id=None, tmdb_id=None, anime_kind=None, anime_id=None):
     with db() as con:
+        if anime_kind in ANIME_COLUMNS and anime_id:
+            column = ANIME_COLUMNS[anime_kind]  # fixed mapping, never user SQL
+            return con.execute(f"SELECT * FROM items WHERE kind=? AND {column}=? "
+                               "ORDER BY item_id DESC LIMIT 20", (kind, anime_id)).fetchall()
         if tmdb_id:
             return con.execute("SELECT * FROM items WHERE kind=? AND (imdb_id=? OR tmdb_id=?) "
                                "ORDER BY item_id DESC LIMIT 20", (kind, imdb_id, tmdb_id)).fetchall()
@@ -454,39 +550,55 @@ async def streams(token: str, media_type: str, media_id: str):
         return {"streams": []}
     imdb_match = STREAM_REQUEST.fullmatch(media_id)
     tmdb_match = TMDB_REQUEST.fullmatch(media_id)
-    if not imdb_match and not tmdb_match:
+    anime_match = ANIME_REQUEST.fullmatch(media_id)
+    if not (imdb_match or tmdb_match or anime_match):
         return {"streams": []}
-    media_id_value, season, episode = (imdb_match or tmdb_match).groups()
+    if anime_match:
+        anime_kind, anime_id, season, episode = anime_match.groups()
+        requested_identity = f"{anime_kind}-{anime_id}"
+        rows = records_for(media_type, anime_kind=anime_kind, anime_id=anime_id)
+    else:
+        media_id_value, season, episode = (imdb_match or tmdb_match).groups()
+        requested_identity = (media_id_value if imdb_match else
+                              f"tmdb-{'movie' if media_type == 'movie' else 'tv'}-{media_id_value}")
+        if imdb_match:
+            rows = records_for(media_type, imdb_id=media_id_value)
+            if not rows and TMDB_KEY:
+                rows = records_for(media_type, imdb_id=media_id_value,
+                                   tmdb_id=await tmdb_from_imdb(media_type, media_id_value))
+        else:
+            rows = records_for(media_type, tmdb_id=media_id_value)
     if media_type == "series" and (season is None or episode is None):
         return {"streams": []}
     if media_type == "movie" and season is not None:
         return {"streams": []}
-    if imdb_match:
-        imdb_id = media_id_value
-        # First use the local indexed IMDb mapping; only call TMDb if we have no local match.
-        rows = records_for(media_type, imdb_id, None)
-        if not rows and TMDB_KEY:
-            tmdb_id = await tmdb_from_imdb(media_type, imdb_id)
-            rows = records_for(media_type, imdb_id, tmdb_id)
-    else:
-        # Direct TMDb ID lookup needs no third-party lookup call.
-        rows = records_for(media_type, "", media_id_value)
     result = []
     for row in rows:
         if media_type == "movie":
-            selected = [(row["item_id"], row["extension"], row["name"])]
+            selected = [(row["item_id"], row["extension"])]
         else:
             with db() as con:
                 eps = con.execute("SELECT * FROM episodes WHERE series_id=? AND season=? AND episode=?",
                                   (row["item_id"], int(season), int(episode))).fetchall()
-            selected = [(r["stream_id"], r["extension"], r["name"]) for r in eps]
-        for sid, ext, name in selected:
-            filename = (f"{row['name']}.S{int(season):02d}E{int(episode):02d}.{ext}"
-                        if media_type == "series" else f"{row['name']}.{ext}")
-            result.append({"name": "Xtream VOD Bridge",
-                           "title": f"{filename} | IPTV VOD",
-                           "url": signed_url(media_type, sid, ext),
-                           "behaviorHints": {"notWebReady": ext.lower() != "mp4", "filename": filename}})
+            selected = [(r["stream_id"], r["extension"]) for r in eps]
+        for sid, ext in selected:
+            filename = friendly_filename(row["name"], media_type, ext, season, episode)
+            # Carry the exact Stremio request identity downstream. This also
+            # preserves a requested IMDb ID when only TMDb was stored locally,
+            # or a requested Kitsu/AniList ID when the row has an IMDb as well.
+            identity = requested_identity
+            if not MEDIA_KEY.fullmatch(identity):
+                continue
+            metadata_label = identity.replace("tmdb-", "TMDb ").replace("anilist-", "AniList ").replace("kitsu-", "Kitsu ").replace("mal-", "MAL ")
+            hints = {"notWebReady": ext.lower() != "mp4", "filename": filename}
+            if media_type == "series":
+                hints["bingeGroup"] = f"xtream-vod-series-{row['item_id']}"
+            result.append({"name": "IPTV VOD",
+                           "title": f"{filename} | {metadata_label} | IPTV VOD",
+                           "description": f"{filename} | {metadata_label} | IPTV VOD",
+                           "url": signed_url(media_type, sid, ext,
+                                             filename=filename, identity=identity),
+                           "behaviorHints": hints})
         if len(result) >= 20:
             break
     return {"streams": result[:20]}
@@ -504,6 +616,25 @@ def valid_signature(kind, sid, ext, exp, sig):
     path = f"/play/{kind}/{sid}.{ext}"
     expected = hmac.new(SECRET.encode(), f"{path}:{until}".encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, sig or "")
+
+
+def valid_named_signature(kind, sid, media_id, exp, sig, filename):
+    if kind not in ("movie", "series") or not safe_int(sid):
+        return False
+    if not MEDIA_KEY.fullmatch(media_id) or not FILENAME.fullmatch(filename):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", sig or ""):
+        return False
+    try:
+        until = int(exp)
+    except (TypeError, ValueError):
+        return False
+    if until < int(time.time()) or until > int(time.time()) + PLAY_HOURS * 3600 + 120:
+        return False
+    expected = hmac.new(SECRET.encode(),
+                        f"v2:{kind}:{sid}:{media_id}:{until}:{filename}".encode(),
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 
 def make_stream_client():
@@ -530,7 +661,8 @@ def safe_redirect(target):
             return (
                 isinstance(address, ipaddress.IPv4Address)
                 and address.is_global
-                and str(address) in HTTP_REDIRECT_ALLOWED_IPS
+                and not address.is_multicast and not address.is_reserved
+                and (HTTP_REDIRECT_MODE == "public-ip" or str(address) in HTTP_REDIRECT_ALLOWED_IPS)
                 and port in (None, 80)
             )
         if host == source.hostname.lower():
@@ -548,8 +680,22 @@ def safe_redirect(target):
 
 @app.api_route("/play/{kind}/{sid}.{ext}", methods=["GET", "HEAD"])
 async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", sig: str = ""):
+    # Compatibility: old query-signed URLs remain valid until their expiry.
     if not valid_signature(kind, sid, ext, exp, sig):
         raise HTTPException(403)
+    return await relay_stream(kind, sid, ext, request)
+
+
+@app.api_route("/play/{kind}/{sid}/{media_id}/{exp}/{sig}/{filename}", methods=["GET", "HEAD"])
+async def play_named(kind: str, sid: int, media_id: str, exp: str, sig: str,
+                     filename: str, request: Request):
+    if not valid_named_signature(kind, sid, media_id, exp, sig, filename):
+        raise HTTPException(403)
+    ext = filename.rsplit(".", 1)[-1].lower()
+    return await relay_stream(kind, sid, ext, request, filename=filename)
+
+
+async def relay_stream(kind, sid, ext, request, filename=None):
     with db() as con:
         if kind == "movie":
             exists = con.execute("SELECT 1 FROM items WHERE kind='movie' AND item_id=? AND extension=?",
@@ -596,6 +742,10 @@ async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", s
                    if k.lower() in ("content-range", "accept-ranges", "content-length", "content-type")}
     # Do not allow provider cookies or cacheable auth results to reach players.
     out_headers["Cache-Control"] = "private, no-store"
+    if filename:
+        # Client hints; unlike query-string signatures, players also receive
+        # a clean human-readable final filename from the path.
+        out_headers["Content-Disposition"] = "inline; filename*=UTF-8''" + quote(filename, safe="")
 
     async def chunks():
         try:

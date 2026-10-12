@@ -18,7 +18,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 
 def config_values(root: Path) -> dict[str, str]:
@@ -79,15 +79,27 @@ for row in con.execute(
 def playback_path(raw_url: str, base_url: str) -> str:
     """Accept only playback signed URLs on this bridge's exact HTTPS origin."""
     target, public = urlsplit(raw_url), urlsplit(base_url)
+    prefix = public.path.rstrip("/") + "/play/movie/"
     if (
         target.scheme != "https" or public.scheme != "https"
         or target.hostname != public.hostname
         or target.port != public.port
         or target.username or target.password or target.fragment
-        or not target.path.startswith(public.path.rstrip("/") + "/play/movie/")
-        or not target.query or "exp=" not in target.query or "sig=" not in target.query
+        or not target.path.startswith(prefix)
     ):
         raise ValueError("Stream URL does not match configured bridge origin")
+    # v0.2 query-free names keep the signed credentials in parent path
+    # and end with a readable media filename, which fixes mpv filename detection.
+    if not target.query:
+        path = unquote(target.path)
+        if not re.fullmatch(
+            re.escape(prefix) + r"\d+/(?:tt\d{7,10}|tmdb-(?:movie|tv)-\d+|(?:anilist|kitsu|mal)-\d+)/"
+            r"\d+/[0-9a-f]{64}/[^/]+\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)", path, re.I
+        ):
+            raise ValueError("Invalid descriptive signed playback URL")
+        return target.path
+    if "exp=" not in target.query or "sig=" not in target.query:
+        raise ValueError("Missing legacy playback token")
     return target.path + "?" + target.query
 
 

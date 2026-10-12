@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.1.3 — HomeDocker
+# Xtream VOD Bridge v0.2.0 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -20,11 +20,32 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
                         Remux / Trellis / other clients
 ```
 
-**No Live TV, EPG, channel lists, catalog browsing, or metadata replacement.** It only adds VOD sources for items that AIOStreams already searches. Movie IDs `tt1234567` / `tmdb:movie:603` and series IDs `tt1234567:1:2` / `tmdb:tv:1399:1:2` are supported. The stream URL is a signed link to your server; Xtream username/password remain server-side. Signed URLs expire; the playing client accesses the server over HTTPS.
+**No Live TV, EPG, channel lists, catalog browsing, or metadata replacement.** It only adds VOD sources for items that AIOStreams already searches. Movie IDs `tt1234567` / `tmdb:movie:603`, series IDs `tt1234567:1:2` / `tmdb:tv:1399:1:2`, and directly tagged `kitsu:`, `anilist:`, `mal:` movie/series IDs are supported. Anime can be either a movie or a TV series. **Anime-ID requests only work when the provider supplies corresponding IDs**; names alone do not create a reliable crosswalk. The stream URL is signed and Xtream username/password remain server-side.
 
 ### What Xtream metadata must contain
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## v0.2.0: metadata identity survives into mpv/Jellyfin-compatible clients
+
+Stremio `stream.title`, `stream.description` and `behaviorHints.filename` contain a readable title and episode code, while the **actual playback URL ends in the same clean filename** and carries IMDb/TMDb (or provider-supplied AniList/Kitsu/MAL) ID as a signed intermediate path component:
+
+```text
+https://your-domain:18450/play/movie/<stream_id>/tt1234567/<expiry>/<signature>/Zootopia.2.2025.mkv
+https://your-domain:18450/play/series/<episode_stream_id>/tt7654321/<expiry>/<signature>/Example.Show.S01E02.mkv
+```
+
+The filenames are derived from **actual Xtream metadata** rather than guessed content; no provider credentials or `?exp=&sig=` query string is exposed at the tail of the filename. This helps consumers such as mpv's `filename` property, whose value otherwise may look like `28369.mkv?exp=...`. However, different metadata/tracking plugins use different heuristics; Stremio fields or human-readable URLs **do not guarantee** every client automatically obtains a Trakt target. A downstream integration may need to read the signed URL's ID path or the original Stremio content ID.
+
+The old query-signed URLs remain valid until expiry for already-playing sessions, so upgrade does not immediately invalidate existing sessions. The SQLite migration only **adds nullable anime identifier columns**, retaining movie/episode indexes. No fuzzy title-based ID assignment is done.
+
+### Rotating HTTP CDN IPs without hardcoding
+
+`XTREAM_HTTP_REDIRECT_MODE=allowlist` (default) keeps the strict v0.1.3 behavior and supports the existing explicit `XTREAM_HTTP_REDIRECT_ALLOWED_IPS`. Providers with frequently rotating public-IP CDN redirects can use **explicit opt-in** `XTREAM_HTTP_REDIRECT_MODE=public-ip`, which accepts `HTTP:80` redirects **only to globally routable public IPv4 literals**. It rejects private, loopback, link-local, IPv6, hostname, userinfo, unexpected ports and non-HTTP schemes. This avoids tracking individual CDN IPs, but broadens trust to all public IPv4 destinations on port 80 if the provider sends a redirect: **upstream video and its CDN URL tokens are unencrypted**. Use only if you trust the source of redirects; HTTPS CDN is preferable. The public player-to-nginx leg remains HTTPS.
+
+### Series and anime rollout
+
+Keep `MOVIES_ONLY=1` initially, take a consistent backup of the SQLite named volume and `.env`, then set `MOVIES_ONLY=0` to begin indexing `get_series` and `get_series_info`. Episodes are matched strictly by season/episode, including season 0 specials. Some Xtream panels expose episodes as a season dictionary and others as a flat episode list; both are accepted. The existing `MAX_ENRICH_PER_SYNC` batch limit still applies to avoid provider rate bans; a large initial series library needs repeated refresh batches and its coverage should be measured rather than assumed. Names without IDs will not be matched. Legacy Stremio clients may use anime-specific IDs not available in Xtream; AniList/Kitsu/MAL **cross-provider lookup is not implemented**. Do not enable source priority for all clients until actual episode playback and watch tracking are tested.
 
 ## Files
 
@@ -123,7 +144,7 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
-- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.1.3`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.0`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
 - Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
 - Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
 
