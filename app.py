@@ -613,6 +613,25 @@ def valid_signature(kind, sid, ext, exp, sig):
     return hmac.compare_digest(expected, sig or "")
 
 
+def valid_named_signature(kind, sid, media_id, exp, sig, filename):
+    if kind not in ("movie", "series") or not safe_int(sid):
+        return False
+    if not MEDIA_KEY.fullmatch(media_id) or not FILENAME.fullmatch(filename):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", sig or ""):
+        return False
+    try:
+        until = int(exp)
+    except (TypeError, ValueError):
+        return False
+    if until < int(time.time()) or until > int(time.time()) + PLAY_HOURS * 3600 + 120:
+        return False
+    expected = hmac.new(SECRET.encode(),
+                        f"v2:{kind}:{sid}:{media_id}:{until}:{filename}".encode(),
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
+
+
 def make_stream_client():
     return httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0), follow_redirects=False,
                              limits=httpx.Limits(max_connections=10, max_keepalive_connections=4))
@@ -637,7 +656,7 @@ def safe_redirect(target):
             return (
                 isinstance(address, ipaddress.IPv4Address)
                 and address.is_global
-                and str(address) in HTTP_REDIRECT_ALLOWED_IPS
+                and (HTTP_REDIRECT_MODE == "public-ip" or str(address) in HTTP_REDIRECT_ALLOWED_IPS)
                 and port in (None, 80)
             )
         if host == source.hostname.lower():
@@ -655,8 +674,22 @@ def safe_redirect(target):
 
 @app.api_route("/play/{kind}/{sid}.{ext}", methods=["GET", "HEAD"])
 async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", sig: str = ""):
+    # Compatibility: old query-signed URLs remain valid until their expiry.
     if not valid_signature(kind, sid, ext, exp, sig):
         raise HTTPException(403)
+    return await relay_stream(kind, sid, ext, request)
+
+
+@app.api_route("/play/{kind}/{sid}/{media_id}/{exp}/{sig}/{filename}", methods=["GET", "HEAD"])
+async def play_named(kind: str, sid: int, media_id: str, exp: str, sig: str,
+                     filename: str, request: Request):
+    if not valid_named_signature(kind, sid, media_id, exp, sig, filename):
+        raise HTTPException(403)
+    ext = filename.rsplit(".", 1)[-1].lower()
+    return await relay_stream(kind, sid, ext, request, filename=filename)
+
+
+async def relay_stream(kind, sid, ext, request, filename=None):
     with db() as con:
         if kind == "movie":
             exists = con.execute("SELECT 1 FROM items WHERE kind='movie' AND item_id=? AND extension=?",
@@ -703,6 +736,10 @@ async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", s
                    if k.lower() in ("content-range", "accept-ranges", "content-length", "content-type")}
     # Do not allow provider cookies or cacheable auth results to reach players.
     out_headers["Cache-Control"] = "private, no-store"
+    if filename:
+        # Client hints; unlike query-string signatures, players also receive
+        # a clean human-readable final filename from the path.
+        out_headers["Content-Disposition"] = "inline; filename*=UTF-8''" + quote(filename, safe="")
 
     async def chunks():
         try:
