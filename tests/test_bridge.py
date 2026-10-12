@@ -34,7 +34,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         result = await bridge.streams("a" * 40, "movie", "tt1234567")
         self.assertEqual(len(result["streams"]), 1)
         stream = result["streams"][0]
-        self.assertIn("/play/movie/17.mkv", stream["url"])
+        self.assertIn("/play/movie/17/tt1234567/", stream["url"])
         self.assertNotIn("example:example", stream["url"])
         self.assertIn("A Test Movie", stream["behaviorHints"]["filename"])
 
@@ -59,7 +59,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                         ("movie", 17, "The Example", "mp4", "603"))
         r = await bridge.streams("a" * 40, "movie", "tmdb:movie:603")
         self.assertEqual(len(r["streams"]), 1)
-        self.assertIn("/movie/17.mp4", r["streams"][0]["url"])
+        self.assertIn("/movie/17/tmdb-movie-603/", r["streams"][0]["url"])
 
     def test_stream_hmac(self):
         u = bridge.signed_url("movie", 11, "mp4")
