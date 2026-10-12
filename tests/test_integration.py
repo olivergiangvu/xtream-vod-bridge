@@ -141,13 +141,13 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
                                      follow_redirects=False)
 
         # A valid public IPv4 redirect still fails unless explicitly enabled.
-        with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", set()), \\
-             patch.object(bridge, "make_stream_client", factory):
+        with (patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", set()),
+             patch.object(bridge, "make_stream_client", factory)):
             self.assertEqual(self.client.get(suffix, headers={"Range": "bytes=0-3"}).status_code, 502)
 
         seen.clear()
-        with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", {"68.235.50.231"}), \\
-             patch.object(bridge, "make_stream_client", factory):
+        with (patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", {"68.235.50.231"}),
+             patch.object(bridge, "make_stream_client", factory)):
             response = self.client.get(suffix, headers={"Range": "bytes=0-3"})
         self.assertEqual(response.status_code, 206)
         self.assertEqual(response.content, b"abcd")
