@@ -19,6 +19,23 @@ class PlaybackPathTests(unittest.TestCase):
         )
         self.assertEqual(path, "/play/movie/123.mp4?exp=123456&sig=abc")
 
+    def test_descriptive_movie_filename_url(self):
+        url = (self.base + "/play/movie/28369/tt1234567/1792005348/"
+               + "a" * 64 + "/Zootopia.2.2025.mkv")
+        result = probe.playback_path(url, self.base)
+        self.assertTrue(result.endswith("/Zootopia.2.2025.mkv"))
+        self.assertNotIn("?", result)
+
+    def test_descriptive_anime_filename_url(self):
+        url = (self.base + "/play/movie/42/anilist-999/1792005348/"
+               + "b" * 64 + "/Anime.Title.2025.mkv")
+        self.assertIn("Anime.Title", probe.playback_path(url, self.base))
+
+    def test_descriptive_path_rejects_missing_signature(self):
+        url = self.base + "/play/movie/28369/tt1234567/1792005348/no/Zootopia.2.mkv"
+        with self.assertRaises(ValueError):
+            probe.playback_path(url, self.base)
+
     def test_reject_other_host(self):
         with self.assertRaises(ValueError):
             probe.playback_path(
