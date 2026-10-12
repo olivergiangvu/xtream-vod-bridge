@@ -61,6 +61,13 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(r["streams"]), 1)
         self.assertIn("/movie/17/tmdb-movie-603/", r["streams"][0]["url"])
 
+    def test_series_bootstrap_batch_limit_rejects_unsafe_config(self):
+        with patch.object(bridge, "SERIES_BOOTSTRAP_BATCH", 51):
+            with self.assertRaisesRegex(RuntimeError, "SERIES_BOOTSTRAP_BATCH"):
+                bridge.check_settings()
+        with patch.object(bridge, "SERIES_BOOTSTRAP_BATCH", 25):
+            bridge.check_settings()
+
     def test_stream_hmac(self):
         u = bridge.signed_url("movie", 11, "mp4")
         from urllib.parse import urlsplit, parse_qs
