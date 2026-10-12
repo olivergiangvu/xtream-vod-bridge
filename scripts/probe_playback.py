@@ -16,6 +16,7 @@ import socket
 import ssl
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -90,6 +91,33 @@ def playback_path(raw_url: str, base_url: str) -> str:
     return target.path + "?" + target.query
 
 
+
+def wait_for_health(
+    checker, *, attempts: int = 25, pause_seconds: float = 2,
+    sleeper=time.sleep,
+) -> tuple[int, int]:
+    """Wait for nginx→backend readiness after container recreate.
+
+    Retry only transient unavailable statuses and transport errors. Fail closed
+    on permission/configuration errors such as 403/404, and never print URLs.
+    """
+    if attempts < 1:
+        raise ValueError("attempts must be positive")
+    last_status = 0
+    for attempt in range(1, attempts + 1):
+        try:
+            last_status = checker()
+        except (OSError, http.client.HTTPException):
+            last_status = 0
+        if last_status == 200:
+            return 200, attempt
+        if last_status not in (0, 502, 503, 504):
+            return last_status, attempt
+        if attempt < attempts:
+            sleeper(pause_seconds)
+    return last_status, attempts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Bounded HTTPS and byte-range probe; never prints secrets"
@@ -119,10 +147,15 @@ def main() -> int:
         def get(path: str, **kwargs):
             return local_https_request(host, port, path, timeout=args.timeout, **kwargs)
 
-        health_status, _, _ = get("/health", max_bytes=4096)
+        health_status, attempts = wait_for_health(
+            lambda: local_https_request(
+                host, port, "/health", max_bytes=4096, timeout=4
+            )[0],
+        )
         print("LOCAL_HTTPS_HEALTH:", health_status)
+        print("HEALTH_ATTEMPTS:", attempts)
         if health_status != 200:
-            raise RuntimeError("Local HTTPS health failed")
+            raise RuntimeError("Local HTTPS health failed after bounded readiness wait")
 
         status, _, manifest_bytes = get(prefix + "/manifest.json")
         manifest = json.loads(manifest_bytes)
