@@ -51,7 +51,7 @@ class OnDemandSeriesTests(unittest.IsolatedAsyncioTestCase):
                          {"IPTV VOD 2160p", "IPTV VOD 1080p"})
         self.assertTrue(all("/play/series/" in x["url"] for x in cold["streams"]))
         self.assertTrue(all("?exp=" not in x["url"] for x in cold["streams"]))
-        self.assertGreaterEqual(bridge.JIT_STATS["cache_hit"], 0)
+        self.assertGreaterEqual(bridge.JIT_STATS["cache_hit"], 2)
         with bridge.db() as con:
             self.assertEqual(con.execute("SELECT count(*) FROM episodes").fetchone()[0], 2)
 
@@ -148,6 +148,22 @@ class OnDemandSeriesTests(unittest.IsolatedAsyncioTestCase):
         episodes = bridge.extract_episodes(raw)
         self.assertEqual(sorted(e[:4] for e in episodes),
                          [(0, 1, 801, "mkv"), (2, 3, 903, "mp4")])
+
+    async def test_background_partial_response_preserves_on_demand_cache(self):
+        self.seed((771, "Example Show", "tt7654321", "42"))
+        with bridge.db() as con:
+            con.execute("INSERT INTO episodes(series_id,season,episode,stream_id,extension,name)"
+                        " VALUES (771,1,1,970,'mkv','First')")
+        async def partial(action, **kwargs):
+            return {"episodes": {"1": [
+                {"id": 971, "episode_num": 2, "container_extension": "mkv"}]}}
+        with patch.object(bridge, "xtream", new=partial), \\
+             patch.object(bridge.asyncio, "sleep", new=asyncio.sleep):
+            await bridge.enrich_items(kind="series", limit=1)
+        with bridge.db() as con:
+            got = [r[0] for r in con.execute(
+                "SELECT stream_id FROM episodes WHERE series_id=771 ORDER BY stream_id")]
+        self.assertEqual(got, [970, 971])
 
     async def test_preexisting_series_episode_and_movie_unchanged(self):
         self.seed((761, "4K Show", "tt7654321", "42"))
