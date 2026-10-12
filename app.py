@@ -518,8 +518,12 @@ async def hydrate_requested_episode(rows, season, episode):
     """Independent Series variants; bound *entire* request wall time."""
     if not SERIES_ON_DEMAND or MOVIES_ONLY or not rows:
         return
-    candidates = [row for row in rows[:SERIES_JIT_MAX_VARIANTS]
-                  if not episode_rows(row["item_id"], season, episode)]
+    candidates = []
+    for row in rows[:SERIES_JIT_MAX_VARIANTS]:
+        if episode_rows(row["item_id"], season, episode):
+            JIT_STATS["cache_hit"] += 1
+        else:
+            candidates.append(row)
     if not candidates:
         return
     tasks = [asyncio.create_task(on_demand_series_info(row, season, episode))
@@ -659,10 +663,15 @@ async def enrich_items(kind=None, limit=None):
                              anime_info.get("kitsu_id") or row["kitsu_id"],
                              anime_info.get("mal_id") or row["mal_id"],
                              int(time.time()), kind, item_id))
-                if kind == "series":
-                    con.execute("DELETE FROM episodes WHERE series_id=?", (item_id,))
-                    con.executemany("INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
-                                    "VALUES(?,?,?,?,?,?)", [(item_id, *ep) for ep in episodes])
+                if kind == "series" and episodes:
+                    # Metadata providers may temporarily omit seasons/episodes.
+                    # Never destroy previously verified on-demand episode rows.
+                    con.executemany(
+                        "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                        "VALUES(?,?,?,?,?,?) "
+                        "ON CONFLICT(series_id,season,episode,stream_id) "
+                        "DO UPDATE SET extension=excluded.extension,name=excluded.name",
+                        [(item_id, *ep) for ep in episodes])
             count += 1
             # Soft throttle. Per-provider acceptable rate varies.
             await asyncio.sleep(0.25)
