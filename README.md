@@ -160,3 +160,14 @@ Replace the test IDs with **actual matches from your authorized IPTV catalog**.
 This script validates index and stream URL contracts, not playback-byte delivery.
 For media playback, perform a separate controlled HEAD/Range test on a signed
 URL without pasting that URL into GitHub issues, CI logs, or shell history.
+
+## Code security / deployment gating
+
+- Dependabot checks Python, Docker base images, and GitHub Actions **weekly**,
+  and raises pull requests for review. There is no auto-merge, release, or CD.
+- CodeQL scans Python and GitHub Actions on pushes, pull requests, and weekly.
+  Security alerts and proposed dependency changes are not proof of production
+  readiness. Review PR diffs and run tests before merging.
+- Before touching the existing HomeDocker deployment, run the **read-only**
+  [HomeDocker SSH preflight](docs/homedocker-preflight.md). It checks for port
+  conflicts without disclosing IPTV secrets or changing system configuration.
