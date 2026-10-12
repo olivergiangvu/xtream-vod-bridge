@@ -117,6 +117,8 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             ("Zootopia 2 (2025) UHD", "2160p"),
             ("FHD Zootopia 2 (2025)", "1080p"),
             ("Zootopia 2 (2025) [720p]", "720p"),
+            ("Zootopia 2 (2025) 1080p", "1080p"),
+            ("Zootopia 2 (2025) HD", "HD"),
             ("Zootopia 2 (2025)", None),
         )
         for title, expected in examples:
@@ -128,6 +130,10 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             "Zootopia.2.2025.2160p.mkv")
         self.assertEqual(
             bridge.friendly_filename("4K Zootopia 2 (2025)", "movie",
+                                     "mkv", quality="2160p"),
+            "Zootopia.2.2025.2160p.mkv")
+        self.assertEqual(
+            bridge.friendly_filename("Zootopia 2 (2025) 2160p", "movie",
                                      "mkv", quality="2160p"),
             "Zootopia.2.2025.2160p.mkv")
 
