@@ -92,6 +92,8 @@ def check_settings():
         raise RuntimeError("Each secret must be different")
     if HTTP_REDIRECT_MODE not in ("allowlist", "public-ip"):
         raise RuntimeError("XTREAM_HTTP_REDIRECT_MODE must be allowlist or public-ip")
+    if SERIES_BOOTSTRAP_BATCH > 50:
+        raise RuntimeError("SERIES_BOOTSTRAP_BATCH must not exceed 50 per interval")
     for value in HTTP_REDIRECT_ALLOWED_IPS:
         try:
             address = ipaddress.ip_address(value)
