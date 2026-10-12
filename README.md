@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.2.1 — HomeDocker
+# Xtream VOD Bridge v0.2.2 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -25,6 +25,26 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
 ### What Xtream metadata must contain
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## v0.2.2: Series episode bootstrap without Movie starvation
+
+A provider may expose thousands of Series already tagged with IMDb/TMDb IDs, but none of their episode streams are available until `get_series_info` has been called. Previously, `MAX_ENRICH_PER_SYNC` was one shared ordered queue; with ~29,000 Movies and ~8,000 Series, Movies consumed every slot and `episodes=0` persisted.
+
+The normal `SYNC_HOURS` index refresh now gives Series a reserved detail quota **inside** the existing `MAX_ENRICH_PER_SYNC` provider budget. Example: `MAX_ENRICH_PER_SYNC=50`, `SERIES_ENRICH_PER_SYNC=40` means up to 40 Series + 10 Movies per regular sync while a Series backlog exists; once the Series queue is empty, all 50 slots can go to Movies. No extra API burst occurs just from upgrading.
+
+An **optional** sequential Series bootstrap worker runs separately when `MOVIES_ONLY=0` and `SERIES_BOOTSTRAP_BATCH>0`. Example:
+```dotenv
+MAX_ENRICH_PER_SYNC=50
+SERIES_ENRICH_PER_SYNC=40
+SERIES_BOOTSTRAP_BATCH=25
+SERIES_BOOTSTRAP_INTERVAL_MINUTES=30
+MOVIES_ONLY=0
+```
+This adds at most 25 Series detail calls every 30 minutes, **in addition to** the ordinary 6-hour batch, with a minimum 15-minute interval and a hard maximum of 50 detail calls per batch. It waits for the startup listing refresh and uses the same in-process lock as normal sync to prevent overlapping workloads. Each successful detail updates SQLite `checked_at`, so a restart resumes rather than re-fetching completed Series. Failures are logged by error type without leaking URLs/passwords; invalid Series details remain unindexed until retried. Provider rate limits vary—start with conservative values and observe before increasing.
+
+`/health` adds `series_progress.details_checked`, `with_episodes`, `pending_enrichment`, `batch_size`, `batch_interval_minutes`, last bootstrap status and per-kind last sync counts. `details_checked` includes failed detail attempts marked for deferred retry, so `with_episodes` is the more useful episode readiness metric. `series.total` is only the number of Series in the Xtream listing; it is not proof that all episodes are indexed. `series.mapped` counts provider-supplied IMDb/TMDb tags, not verified matches to every episode.
+
+No database schema changes, stream URLs, codecs, nginx, sorting or movie playback behavior change in v0.2.2. To switch off the extra worker, set `SERIES_BOOTSTRAP_BATCH=0` and recreate this container. `MOVIES_ONLY=1` suppresses the Series worker and Series listing/enrichment. No `down -v`.
 
 ## v0.2.1: preserve Xtream source resolution tags
 
@@ -153,7 +173,7 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
-- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.1`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.2`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
 - Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
 - Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
 
