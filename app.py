@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -18,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.1.3"
+VERSION = "0.2.0"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -47,12 +48,20 @@ REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
 # This is explicitly distinct from the HTTPS redirect allowlist.
 HTTP_REDIRECT_ALLOWED_IPS = {ip.strip() for ip in
                              os.getenv("XTREAM_HTTP_REDIRECT_ALLOWED_IPS", "").split(",") if ip.strip()}
+# Explicit opt-in; no fixed CDN IP maintenance needed when the provider
+# redirects to rotating public IPv4 addresses. Private IPs remain blocked.
+HTTP_REDIRECT_MODE = os.getenv("XTREAM_HTTP_REDIRECT_MODE", "allowlist").strip().lower()
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "index.sqlite"
 VALID_EXT = re.compile(r"^(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
 VALID_ID = re.compile(r"^tt\d{7,10}$")
 STREAM_REQUEST = re.compile(r"^(tt\d{7,10})(?::(\d+):(\d+))?$")
-TMDB_REQUEST = re.compile(r"^tmdb:(?:(?:movie|tv|series):)?(\d+)(?::(\d+):(\d+))?$")
+TMDB_REQUEST = re.compile(r"^tmdb:(?:(?:movie|tv|series):)?(\\d+)(?::(\\d+):(\\d+))?$")
+ANIME_REQUEST = re.compile(r"^(anilist|kitsu|mal):(\\d+)(?::(\\d+):(\\d+))?$")
+MEDIA_KEY = re.compile(r"^(?:tt\\d{7,10}|tmdb-(?:movie|tv)-\\d+|(?:anilist|kitsu|mal)-\\d+)$")
+FILENAME = re.compile(r"^[\\w.-]{1,200}\\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", re.I)
+ANIME_COLUMNS = {"anilist": "anilist_id", "kitsu": "kitsu_id", "mal": "mal_id"}
+
 LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None}
 LOCK = asyncio.Lock()
 
@@ -73,6 +82,8 @@ def check_settings():
             raise RuntimeError(f"{key} requires at least 32 random characters")
     if len({ADDON_TOKEN, ADMIN_TOKEN, SECRET}) < 3:
         raise RuntimeError("Each secret must be different")
+    if HTTP_REDIRECT_MODE not in ("allowlist", "public-ip"):
+        raise RuntimeError("XTREAM_HTTP_REDIRECT_MODE must be allowlist or public-ip")
     for value in HTTP_REDIRECT_ALLOWED_IPS:
         try:
             address = ipaddress.ip_address(value)
@@ -127,6 +138,12 @@ def init_db():
           PRIMARY KEY(kind, imdb_id)
         );
         """)
+        # Non-destructive additive migration; retains all indexed movies/episodes.
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(items)")}
+        for column in ANIME_COLUMNS.values():
+            if column not in existing:
+                conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column} ON items(kind, {column})")
 
 
 def clean_id(value):
@@ -239,23 +256,78 @@ def find_metadata(payload, kind):
     return imdb_id, tmdb_id
 
 
+def find_anime_ids(payload):
+    """Only use IDs provided by the Xtream data, never infer from titles."""
+    result = {}
+    if not isinstance(payload, dict):
+        return result
+    parts = [payload]
+    parts += [payload[k] for k in ("info", "movie_data") if isinstance(payload.get(k), dict)]
+    candidates = {
+        "anilist_id": ("anilist_id", "anilist", "anilistId"),
+        "kitsu_id": ("kitsu_id", "kitsu", "kitsuId"),
+        "mal_id": ("mal_id", "myanimelist_id", "mal", "malId"),
+    }
+    for part in parts:
+        for column, aliases in candidates.items():
+            if column not in result:
+                for alias in aliases:
+                    value = clean_id(part.get(alias))
+                    if value:
+                        result[column] = value
+                        break
+    return result
+
+
+def friendly_filename(name, kind, ext, season=None, episode=None):
+    """Clean UTF-8 basename is the last URL component for mpv/metadata scrapers."""
+    text = unicodedata.normalize("NFKC", str(name or "Media"))
+    text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
+    text = re.sub(r"^(?:(?:\\[(?:4K|UHD|HD|FHD|1080P|2160P)\\]|(?:4K|UHD|FHD)[\\s:_|-]+)\\s*)+", "", text, flags=re.I)
+    text = re.sub(r"[^\\w]+", ".", text, flags=re.UNICODE).strip(".")
+    text = text[:145].rstrip(".") or "Media"
+    if kind == "series":
+        text += f".S{int(season):02d}E{int(episode):02d}"
+    return f"{text}.{ext}"
+
+
+def media_key(row, kind, requested=None):
+    imdb = row["imdb_id"]
+    if imdb:
+        return imdb
+    tmdb_id = row["tmdb_id"]
+    if tmdb_id:
+        return f"tmdb-{'movie' if kind == 'movie' else 'tv'}-{tmdb_id}"
+    for name, col in ANIME_COLUMNS.items():
+        if row[col]:
+            return f"{name}-{row[col]}"
+    return requested or "unknown"
+
+
 def extract_episodes(info):
     epmap = info.get("episodes") if isinstance(info, dict) else None
-    if not isinstance(epmap, dict):
+    if isinstance(epmap, dict):
+        seasons = epmap.items()
+    elif isinstance(epmap, list):
+        seasons = [(None, epmap)]
+    else:
         return []
     results = []
-    for season_key, entries in epmap.items():
-        season = safe_int(season_key)
-        # Season 0 specials can be supported by Xtream, and Stremio uses season 0.
-        if str(season_key).strip() == "0":
-            season = 0
-        if season is None or not isinstance(entries, list):
+    for season_key, entries in seasons:
+        if not isinstance(entries, list):
             continue
         for raw in entries:
             if not isinstance(raw, dict):
                 continue
-            episode = safe_int(raw.get("episode_num"))
-            stream_id = safe_int(raw.get("id"))
+            raw_season = season_key if season_key is not None else raw.get("season") or raw.get("season_number", 1)
+            try:
+                season = int(raw_season)
+            except (TypeError, ValueError):
+                continue
+            if season < 0:
+                continue
+            episode = safe_int(raw.get("episode_num") or raw.get("episode_number") or raw.get("number"))
+            stream_id = safe_int(raw.get("id") or raw.get("stream_id"))
             if episode and stream_id:
                 results.append((season, episode, stream_id, extension(raw.get("container_extension")), str(raw.get("title") or "")))
     return results
