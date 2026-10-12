@@ -19,7 +19,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.2.2"
+VERSION = "0.3.0"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -45,6 +45,12 @@ SERIES_BOOTSTRAP_INTERVAL_MINUTES = max(
 INFO_DAYS = max(1, int(os.getenv("REFRESH_INFO_DAYS", "30")))
 PLAY_HOURS = max(1, int(os.getenv("PLAY_URL_HOURS", "48")))
 MOVIES_ONLY = os.getenv("MOVIES_ONLY", "0") == "1"
+# Safe opt-in for the first HomeDocker pilot. Does not touch existing Movie VOD.
+SERIES_ON_DEMAND = os.getenv("SERIES_ON_DEMAND", "0") == "1"
+SERIES_JIT_TIMEOUT = min(15.0, max(2.0, float(os.getenv("SERIES_JIT_TIMEOUT_SECONDS", "8"))))
+SERIES_JIT_TTL = max(900, int(os.getenv("SERIES_JIT_TTL_HOURS", "6")) * 3600)
+SERIES_JIT_RETRY_SECONDS = max(30, int(os.getenv("SERIES_JIT_RETRY_SECONDS", "120")))
+SERIES_JIT_MAX_VARIANTS = min(8, max(1, int(os.getenv("SERIES_JIT_MAX_VARIANTS", "8"))))
 # Fail closed on redirects. Some providers use CDN redirects; explicitly allow
 # only approved CDN hostnames, not arbitrary targets supplied by the provider.
 REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
@@ -72,6 +78,15 @@ LAST_RUN = {"list_sync": None, "enriched": 0, "last_error": None,
             "series_bootstrap_last_run": None, "series_bootstrap_last_enriched": 0,
             "series_bootstrap_last_error": None}
 LOCK = asyncio.Lock()
+# Serialise duplicate requests for the same provider Series while allowing
+# unrelated Series to resolve concurrently. No global sync lock on stream reads.
+JIT_SERIES_LOCKS = {}
+JIT_PROVIDER_SEMAPHORE = asyncio.Semaphore(2)
+JIT_RETRY_AFTER = {}
+JIT_STATS = {"cache_hit": 0, "cache_miss": 0, "fetch_ok": 0,
+             "fetch_failed": 0, "timeout": 0, "deduplicated": 0,
+             "negative_cache": 0}
+JIT_ACTIVE = 0
 
 
 def check_settings():
@@ -343,32 +358,191 @@ def media_key(row, kind, requested=None):
 
 
 def extract_episodes(info):
-    epmap = info.get("episodes") if isinstance(info, dict) else None
-    if isinstance(epmap, dict):
-        seasons = epmap.items()
-    elif isinstance(epmap, list):
-        seasons = [(None, epmap)]
-    else:
-        return []
-    results = []
-    for season_key, entries in seasons:
-        if not isinstance(entries, list):
-            continue
-        for raw in entries:
-            if not isinstance(raw, dict):
+    """Parse explicit season/episode identities, including nested Xtream shapes.
+
+    No guessed episode numbers from array ordering: wrong episode identity can
+    corrupt watch history and Trakt scrobbling, especially for anime.
+    """
+    root = info.get("episodes") if isinstance(info, dict) else None
+    result = []
+    seen = set()
+
+    def number(value, allow_zero=False):
+        try:
+            number_value = int(str(value).strip())
+            return number_value if number_value >= (0 if allow_zero else 1) else None
+        except (ValueError, TypeError):
+            return None
+
+    def walk(node, season_hint=None, depth=0):
+        if depth > 8:
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child, season_hint, depth + 1)
+            return
+        if not isinstance(node, dict):
+            return
+        info_part = node.get("info") if isinstance(node.get("info"), dict) else {}
+        raw_id = next((v for v in (
+            node.get("id"), node.get("stream_id"), node.get("episode_id"),
+            info_part.get("id"), info_part.get("stream_id"), info_part.get("episode_id")
+        ) if number(v) is not None), None)
+        stream_id = number(raw_id)
+        if stream_id:
+            title = str(node.get("title") or info_part.get("title") or "")
+            match = re.search(r"(?<!\w)S(\d{1,3})[ ._-]*E(\d{1,4})(?!\w)", title, re.I)
+            season = next((n for n in [
+                number(node.get("season"), True),
+                number(node.get("season_number"), True),
+                number(node.get("season_num"), True),
+                number(info_part.get("season"), True),
+                number(info_part.get("season_number"), True),
+                season_hint,
+                number(match.group(1), True) if match else None,
+            ] if n is not None), None)
+            episode = next((n for n in [
+                number(node.get("episode_num")),
+                number(node.get("episode_number")),
+                number(node.get("episode")),
+                number(node.get("number")),
+                number(info_part.get("episode_num")),
+                number(info_part.get("episode_number")),
+                number(match.group(2)) if match else None,
+            ] if n is not None), None)
+            if season is not None and episode is not None:
+                ext = extension(node.get("container_extension") or info_part.get("container_extension"))
+                key = (season, episode, stream_id)
+                if key not in seen:
+                    seen.add(key)
+                    result.append((season, episode, stream_id, ext, title))
+            return
+        if "episodes" in node:
+            walk(node["episodes"], season_hint, depth + 1)
+        for key, value in node.items():
+            if key in ("episodes", "info"):
                 continue
-            raw_season = season_key if season_key is not None else raw.get("season") or raw.get("season_number", 1)
-            try:
-                season = int(raw_season)
-            except (TypeError, ValueError):
-                continue
-            if season < 0:
-                continue
-            episode = safe_int(raw.get("episode_num") or raw.get("episode_number") or raw.get("number"))
-            stream_id = safe_int(raw.get("id") or raw.get("stream_id"))
-            if episode and stream_id:
-                results.append((season, episode, stream_id, extension(raw.get("container_extension")), str(raw.get("title") or "")))
-    return results
+            if isinstance(value, (dict, list)):
+                parsed = number(key, True)
+                if parsed is None:
+                    match = re.fullmatch(r"(?:season[\s_-]*)?(\d{1,3})", str(key), re.I)
+                    parsed = number(match.group(1), True) if match else None
+                walk(value, parsed if parsed is not None else season_hint, depth + 1)
+
+    walk(root)
+    return result
+
+
+def episode_rows(series_id, season, episode):
+    with db() as con:
+        return con.execute(
+            "SELECT * FROM episodes WHERE series_id=? AND season=? AND episode=?",
+            (series_id, season, episode),
+        ).fetchall()
+
+
+async def on_demand_series_info(row, season, episode):
+    """Cache-aside detail resolution with per-Series single-flight and a deadline."""
+    global JIT_ACTIVE
+    series_id = row["item_id"]
+    if episode_rows(series_id, season, episode):
+        JIT_STATS["cache_hit"] += 1
+        return
+    JIT_STATS["cache_miss"] += 1
+    gate = JIT_SERIES_LOCKS.setdefault(series_id, asyncio.Lock())
+    if gate.locked():
+        JIT_STATS["deduplicated"] += 1
+    async with gate:
+        # Another request or the background bootstrap may already have filled it.
+        if episode_rows(series_id, season, episode):
+            return
+        now = int(time.time())
+        with db() as con:
+            persisted = con.execute(
+                "SELECT checked_at FROM items WHERE kind='series' AND item_id=?",
+                (series_id,),
+            ).fetchone()
+        if not persisted:
+            return
+        # A successful detail fetch also caches negative episode lookups. New
+        # episodes become eligible again after TTL (default 6 hours).
+        if persisted["checked_at"] > now - SERIES_JIT_TTL:
+            JIT_STATS["negative_cache"] += 1
+            return
+        if JIT_RETRY_AFTER.get(series_id, 0) > time.monotonic():
+            JIT_STATS["negative_cache"] += 1
+            return
+        try:
+            async with JIT_PROVIDER_SEMAPHORE:
+                JIT_ACTIVE += 1
+                try:
+                    payload = await xtream("get_series_info", series_id=series_id)
+                finally:
+                    JIT_ACTIVE -= 1
+            if not isinstance(payload, dict) or not isinstance(payload.get("episodes"), (list, dict)):
+                raise ValueError("Invalid Series episode payload")
+            parsed = extract_episodes(payload)
+            # An incomplete/empty provider answer must never wipe cached rows.
+            if not parsed and episode_rows(series_id, season, episode):
+                return
+            with db() as con:
+                if parsed:
+                    con.executemany(
+                        "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                        "VALUES(?,?,?,?,?,?) ON CONFLICT(series_id,season,episode,stream_id) "
+                        "DO UPDATE SET extension=excluded.extension,name=excluded.name",
+                        [(series_id, *ep) for ep in parsed],
+                    )
+                ids = find_metadata(payload, "series")
+                anime = find_anime_ids(payload)
+                con.execute(
+                    "UPDATE items SET checked_at=?, imdb_id=COALESCE(?,imdb_id), "
+                    "tmdb_id=COALESCE(?,tmdb_id), "
+                    "anilist_id=COALESCE(?,anilist_id),kitsu_id=COALESCE(?,kitsu_id),"
+                    "mal_id=COALESCE(?,mal_id) WHERE kind='series' AND item_id=?",
+                    (now, ids[0], ids[1], anime.get("anilist_id"),
+                     anime.get("kitsu_id"), anime.get("mal_id"), series_id),
+                )
+            JIT_STATS["fetch_ok"] += 1
+            JIT_RETRY_AFTER.pop(series_id, None)
+        except asyncio.CancelledError:
+            # Deadline cancellation is expected; never persist half a fetch.
+            raise
+        except Exception as exc:
+            JIT_STATS["fetch_failed"] += 1
+            JIT_RETRY_AFTER[series_id] = time.monotonic() + SERIES_JIT_RETRY_SECONDS
+            LOG.warning("Series JIT unavailable error=%s", type(exc).__name__)
+
+
+async def hydrate_requested_episode(rows, season, episode):
+    """Independent Series variants; bound *entire* request wall time."""
+    if not SERIES_ON_DEMAND or MOVIES_ONLY or not rows:
+        return
+    candidates = [row for row in rows[:SERIES_JIT_MAX_VARIANTS]
+                  if not episode_rows(row["item_id"], season, episode)]
+    if not candidates:
+        return
+    tasks = [asyncio.create_task(on_demand_series_info(row, season, episode))
+             for row in candidates]
+    try:
+        done, pending = await asyncio.wait(tasks, timeout=SERIES_JIT_TIMEOUT)
+        if pending:
+            JIT_STATS["timeout"] += len(pending)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for task in done:
+            if not task.cancelled():
+                # This is defensive; per-Series fetch logs failures internally.
+                try:
+                    task.result()
+                except Exception as exc:
+                    LOG.warning("Series JIT task error=%s", type(exc).__name__)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
 
 
 async def sync_lists():
@@ -456,6 +630,9 @@ async def enrich_items(kind=None, limit=None):
             raise ValueError("Unsupported item kind")
     count = 0
     for row in pending:
+        # User-initiated episode lookups outrank optional background hydration.
+        if JIT_ACTIVE:
+            await asyncio.sleep(0.5)
         kind, item_id = row["kind"], row["item_id"]
         try:
             result = await xtream("get_vod_info" if kind == "movie" else "get_series_info",
@@ -610,6 +787,8 @@ async def health():
     return {"status": "ok", "version": VERSION, "last_sync": LAST_RUN["list_sync"],
             "enriched_last_sync": LAST_RUN["enriched"], "last_error": LAST_RUN["last_error"],
             "index": stats, "episodes": episode_count,
+            "series_on_demand": SERIES_ON_DEMAND and not MOVIES_ONLY,
+            "jit": dict(JIT_STATS),
             "series_progress": {"details_checked": series_checked,
                                 "with_episodes": series_with_episodes,
                                 "pending_enrichment": series_pending,
@@ -699,6 +878,8 @@ async def streams(token: str, media_type: str, media_id: str):
         return {"streams": []}
     if media_type == "movie" and season is not None:
         return {"streams": []}
+    if media_type == "series" and SERIES_ON_DEMAND:
+        await hydrate_requested_episode(rows, int(season), int(episode))
     result = []
     for row in rows:
         if media_type == "movie":
