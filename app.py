@@ -555,9 +555,12 @@ async def streams(token: str, media_type: str, media_id: str):
         return {"streams": []}
     if anime_match:
         anime_kind, anime_id, season, episode = anime_match.groups()
+        requested_identity = f"{anime_kind}-{anime_id}"
         rows = records_for(media_type, anime_kind=anime_kind, anime_id=anime_id)
     else:
         media_id_value, season, episode = (imdb_match or tmdb_match).groups()
+        requested_identity = (media_id_value if imdb_match else
+                              f"tmdb-{'movie' if media_type == 'movie' else 'tv'}-{media_id_value}")
         if imdb_match:
             rows = records_for(media_type, imdb_id=media_id_value)
             if not rows and TMDB_KEY:
@@ -580,12 +583,13 @@ async def streams(token: str, media_type: str, media_id: str):
             selected = [(r["stream_id"], r["extension"]) for r in eps]
         for sid, ext in selected:
             filename = friendly_filename(row["name"], media_type, ext, season, episode)
-            identity = media_key(row, media_type)
+            # Carry the exact Stremio request identity downstream. This also
+            # preserves a requested IMDb ID when only TMDb was stored locally,
+            # or a requested Kitsu/AniList ID when the row has an IMDb as well.
+            identity = requested_identity
             if not MEDIA_KEY.fullmatch(identity):
                 continue
-            metadata_label = row["imdb_id"] or (
-                f"TMDb {row['tmdb_id']}" if row["tmdb_id"] else identity.replace("-", " ", 1)
-            )
+            metadata_label = identity.replace("tmdb-", "TMDb ").replace("anilist-", "AniList ").replace("kitsu-", "Kitsu ").replace("mal-", "MAL ")
             hints = {"notWebReady": ext.lower() != "mp4", "filename": filename}
             if media_type == "series":
                 hints["bingeGroup"] = f"xtream-vod-series-{row['item_id']}"
