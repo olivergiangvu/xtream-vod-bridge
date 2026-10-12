@@ -67,6 +67,76 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:3.json").json(), {"streams": []})
         self.assertEqual(self.client.get("/a/invalid/manifest.json").status_code, 404)
 
+    async def test_4k_and_untagged_movie_versions_stay_distinguishable(self):
+        """Regression: AIOStreams used to see one IPTV VOD 2160p + one standard."""
+        with bridge.db() as con:
+            con.executemany(
+                "INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                "VALUES ('movie',?,?, 'mkv', 'tt1234567')",
+                [(101, "4K Zootopia 2 (2025)"),
+                 (102, "Zootopia 2 (2025)")],
+            )
+        response = self.client.get(f"/a/{TOKEN}/stream/movie/tt1234567.json")
+        self.assertEqual(response.status_code, 200)
+        streams = response.json()["streams"]
+        self.assertEqual(len(streams), 2)
+        by_label = {s["name"]: s for s in streams}
+        self.assertEqual(set(by_label), {"IPTV VOD", "IPTV VOD 2160p"})
+        high = by_label["IPTV VOD 2160p"]
+        normal = by_label["IPTV VOD"]
+        self.assertEqual(high["behaviorHints"]["filename"],
+                         "Zootopia.2.2025.2160p.mkv")
+        self.assertEqual(normal["behaviorHints"]["filename"],
+                         "Zootopia.2.2025.mkv")
+        self.assertTrue(high["url"].endswith("/Zootopia.2.2025.2160p.mkv"))
+        self.assertTrue(normal["url"].endswith("/Zootopia.2.2025.mkv"))
+        self.assertIn("2160p", high["title"])
+        self.assertNotIn("2160p", normal["title"])
+        self.assertIn("/tt1234567/", high["url"])
+        self.assertNotIn("?exp=", high["url"])
+        self.assertNotEqual(high["url"], normal["url"])
+
+    async def test_episode_specific_quality_tag_is_retained(self):
+        with bridge.db() as con:
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('series',501,'Example Anime','mkv','tt7654321')")
+            con.execute("INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                        "VALUES (501,1,3,503,'mkv','[1080p] Episode 3')")
+        response = self.client.get(f"/a/{TOKEN}/stream/series/tt7654321:1:3.json")
+        self.assertEqual(response.status_code, 200)
+        streams = response.json()["streams"]
+        self.assertEqual(len(streams), 1)
+        self.assertEqual(streams[0]["name"], "IPTV VOD 1080p")
+        self.assertTrue(streams[0]["url"].endswith("/Example.Anime.S01E03.1080p.mkv"))
+
+    def test_quality_tag_recognition_uses_provider_labels_only(self):
+        examples = (
+            ("[4K] Zootopia 2 (2025)", "2160p"),
+            ("4K Zootopia 2 (2025)", "2160p"),
+            ("Zootopia 2 (2025) [2160p]", "2160p"),
+            ("Zootopia 2 (2025) UHD", "2160p"),
+            ("FHD Zootopia 2 (2025)", "1080p"),
+            ("Zootopia 2 (2025) [720p]", "720p"),
+            ("Zootopia 2 (2025) 1080p", "1080p"),
+            ("Zootopia 2 (2025) HD", "HD"),
+            ("Zootopia 2 (2025)", None),
+        )
+        for title, expected in examples:
+            with self.subTest(title=title):
+                self.assertEqual(bridge.quality_hint(title), expected)
+        self.assertEqual(
+            bridge.friendly_filename("Zootopia 2 (2025) [2160p]", "movie",
+                                     "mkv", quality="2160p"),
+            "Zootopia.2.2025.2160p.mkv")
+        self.assertEqual(
+            bridge.friendly_filename("4K Zootopia 2 (2025)", "movie",
+                                     "mkv", quality="2160p"),
+            "Zootopia.2.2025.2160p.mkv")
+        self.assertEqual(
+            bridge.friendly_filename("Zootopia 2 (2025) 2160p", "movie",
+                                     "mkv", quality="2160p"),
+            "Zootopia.2.2025.2160p.mkv")
+
     async def test_signed_playback_range_head_and_tampering(self):
         with bridge.db() as con:
             con.execute("INSERT INTO items(kind,item_id,name,extension) VALUES ('movie',45,'Fake Film','mp4')")

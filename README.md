@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.2.0 — HomeDocker
+# Xtream VOD Bridge v0.2.1 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -25,6 +25,15 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
 ### What Xtream metadata must contain
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## v0.2.1: preserve Xtream source resolution tags
+
+v0.2.0 cleaned provider prefixes such as `4K Zootopia 2 (2025)` out of the player filename but also removed the distinction between 4K and other versions in AIOStreams. v0.2.1 **preserves resolution cues in the Stremio stream name, title, description, behaviorHints.filename and signed playback basename**. Example for two otherwise equivalent provider entries:
+
+- `4K Zootopia 2 (2025)` → `IPTV VOD 2160p`, filename `Zootopia.2.2025.2160p.mkv`
+- `Zootopia 2 (2025)` → `IPTV VOD`, filename `Zootopia.2.2025.mkv`
+
+This is a **provider-title-derived hint**, not a measured stream resolution or codec verification. Recognized 4K/UHD, 2160p, 1080p/FHD, 720p, 480p, and explicit HD/SD labels. Bare HD/SD retain their ambiguous labels rather than assuming 720p/480p. For series, episode-specific labels take priority over series title. Unknown quality stays unlabeled; it must not be assumed to be 1080p. The IMDb/TMDb ID path, URL signatures and existing index are unchanged; no SQLite migration or provider resync is required.
 
 ## v0.2.0: metadata identity survives into mpv/Jellyfin-compatible clients
 
@@ -144,7 +153,7 @@ If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `h
 - Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
 - Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
 - Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
-- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.0`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.2.1`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
 - Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
 - Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
 
