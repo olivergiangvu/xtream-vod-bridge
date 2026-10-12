@@ -132,7 +132,7 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
         def redirected(request):
             seen.append(request)
             if request.url.host == "example.invalid":
-                return httpx.Response(302, headers={"Location": "http://68.235.50.231/media/asset.mp4"})
+                return httpx.Response(302, headers={"Location": "http://8.8.8.8/media/asset.mp4"})
             return httpx.Response(206, content=b"abcd",
                                   headers={"Content-Range": "bytes 0-3/10"})
 
@@ -146,7 +146,7 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.client.get(suffix, headers={"Range": "bytes=0-3"}).status_code, 502)
 
         seen.clear()
-        with (patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", {"68.235.50.231"}),
+        with (patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS", {"8.8.8.8"}),
              patch.object(bridge, "make_stream_client", factory)):
             response = self.client.get(suffix, headers={"Range": "bytes=0-3"})
         self.assertEqual(response.status_code, 206)
@@ -159,20 +159,20 @@ class MockedIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_cdn_only_exact_global_ipv4_port_80(self):
         with patch.object(bridge, "HTTP_REDIRECT_ALLOWED_IPS",
-                          {"68.235.50.231", "127.0.0.1", "192.168.1.1", "169.254.169.254", "cdn.example.invalid"}):
-            self.assertTrue(bridge.safe_redirect("http://68.235.50.231/asset.mp4"))
-            self.assertTrue(bridge.safe_redirect("http://68.235.50.231:80/asset.mp4"))
+                          {"8.8.8.8", "127.0.0.1", "192.168.1.1", "169.254.169.254", "cdn.example.invalid"}):
+            self.assertTrue(bridge.safe_redirect("http://8.8.8.8/asset.mp4"))
+            self.assertTrue(bridge.safe_redirect("http://8.8.8.8:80/asset.mp4"))
             for target in (
-                "http://68.235.50.232/asset.mp4",
-                "http://68.235.50.231:8080/asset.mp4",
-                "http://68.235.50.231:22/asset.mp4",
+                "http://8.8.4.4/asset.mp4",
+                "http://8.8.8.8:8080/asset.mp4",
+                "http://8.8.8.8:22/asset.mp4",
                 "http://127.0.0.1/asset.mp4",
                 "http://192.168.1.1/asset.mp4",
                 "http://169.254.169.254/latest/meta-data/",
                 "http://cdn.example.invalid/asset.mp4",
-                "http://u:p@68.235.50.231/asset.mp4",
+                "http://u:p@8.8.8.8/asset.mp4",
                 "file:///etc/passwd",
-                "http://68.235.50.231:invalid/asset.mp4",
+                "http://8.8.8.8:invalid/asset.mp4",
                 "http://[::1]/asset.mp4",
             ):
                 with self.subTest(target=target):
