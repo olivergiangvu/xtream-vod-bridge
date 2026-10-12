@@ -157,8 +157,7 @@ class OnDemandSeriesTests(unittest.IsolatedAsyncioTestCase):
         async def partial(action, **kwargs):
             return {"episodes": {"1": [
                 {"id": 971, "episode_num": 2, "container_extension": "mkv"}]}}
-        with patch.object(bridge, "xtream", new=partial), \\
-             patch.object(bridge.asyncio, "sleep", new=asyncio.sleep):
+        with patch.object(bridge, "xtream", new=partial):
             await bridge.enrich_items(kind="series", limit=1)
         with bridge.db() as con:
             got = [r[0] for r in con.execute(
