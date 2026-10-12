@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+*.sqlite*
+*.db
+*.log
+*.zip
+tests/
+docs/
+*.md
+*.pem
+*.key

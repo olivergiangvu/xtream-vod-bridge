@@ -1,0 +1,26 @@
+services:
+  xtream-vod-bridge:
+    build: .
+    image: homedocker/xtream-vod-bridge:0.1.1
+    container_name: xtream-vod-bridge
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:18767:8767"
+    volumes:
+      - xtream_vod_index:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+volumes:
+  xtream_vod_index:

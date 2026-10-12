@@ -1,1 +1,145 @@
-# xtream-vod-bridge
+# Xtream VOD Bridge v0.1.1 — HomeDocker
+
+**Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
+
+**Goal:** Turn an **authorized** Xtream Codes IPTV provider's VOD movies and TV episodes into standard Stremio addon `stream` results, then use AIOStreams **Custom Addon + Addon-first sorting** to put them above other sources. Works without editing AIOStreams/AIOMetadata, Remux, or Trellis.
+
+## Architecture
+
+```text
+Xtream provider ──(get_vod_streams/get_vod_info; get_series/get_series_info)──┐
+                                                                            │
+TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)───────────┤
+                                                                            ▼
+                              Xtream VOD Bridge (SQLite index, 6h sync)
+                                  |                    |
+                       Stremio manifest + streams   signed /play relay
+                                  |                    |
+                              AIOStreams ──────────────┤
+                                  |                    |
+                        Remux / Trellis / other clients
+```
+
+**No Live TV, EPG, channel lists, catalog browsing, or metadata replacement.** It only adds VOD sources for items that AIOStreams already searches. Movie IDs `tt1234567` / `tmdb:movie:603` and series IDs `tt1234567:1:2` / `tmdb:tv:1399:1:2` are supported. The stream URL is a signed link to your server; Xtream username/password remain server-side. Signed URLs expire; the playing client accesses the server over HTTPS.
+
+### What Xtream metadata must contain
+
+The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## Files
+
+- `app.py` — service, indexing, metadata matching, and byte-forwarding playback relay
+- `compose.yaml` — separate Docker stack, single new container, named persistent volume, localhost-only port
+- `.env.example` — configuration skeleton; copy to `.env` and add credentials **locally**
+- `nginx-snippet.conf` — one location block added to an existing host nginx HTTPS server
+- `tests/test_bridge.py` — isolated unit tests using fake IDs, no real provider needed
+
+## Deployment (SSH to Linux HomeDocker)
+
+1. Copy the extracted directory to the Linux host (for instance `/opt/xtream-vod-bridge`) using your preferred SSH/SCP workflow. Ensure only trusted admins can read the directory.
+2. SSH, then:
+
+```bash
+cd /opt/xtream-vod-bridge
+cp .env.example .env
+chmod 600 .env
+openssl rand -hex 32   # paste as ADDON_TOKEN
+openssl rand -hex 32   # paste as ADMIN_TOKEN (different)
+openssl rand -hex 32   # paste as PLAYBACK_SECRET (different)
+nano .env
+```
+
+Set:
+- `XTREAM_BASE_URL`, `XTREAM_USERNAME`, `XTREAM_PASSWORD` to your **authorized** provider credentials.
+- `PUBLIC_BASE_URL=https://YOUR_WORKING_HTTPS_DOMAIN/xtream-vod` (not localhost, and avoid a trailing slash).
+- `TMDB_API_KEY` if the provider uses TMDb identifiers or for IMDb↔TMDb conversion.
+- `ADDON_TOKEN`, `ADMIN_TOKEN`, `PLAYBACK_SECRET`: **different**, random, >=32 characters.
+- `MAX_ENRICH_PER_SYNC`: number of detail records queried in each background sync; defaults to 250 per 6h to protect the provider from a large burst. Initial warm-up of huge catalogs can take many syncs. Temporarily increasing this can speed up initial indexing, but requires verifying your provider's API limits.
+
+3. Start **only the new service**:
+
+```bash
+sudo docker compose up -d --build
+sudo docker compose ps
+curl -fsS http://127.0.0.1:18767/health
+sudo docker compose logs --tail=50 xtream-vod-bridge
+```
+
+4. Backup the existing host nginx config. Copy the `location` block from `nginx-snippet.conf` **inside** your existing HTTPS `server {}` block for the same domain. Check for a pre-existing `/xtream-vod/` location first. Adjust the port only if `18767` is already taken. Do not blindly replace nginx config files.
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+5. Test the **exact** public URL (the below is only a path example; put your own domain and random token):
+
+```text
+https://YOUR_WORKING_HTTPS_DOMAIN/xtream-vod/a/YOUR_ADDON_TOKEN/manifest.json
+```
+
+It must return JSON identifying `Xtream VOD Bridge`, `resources:["stream"]`, and supported movie/series types. Your clients should access this same HTTPS hostname from their own network; local success does not prove public connectivity.
+
+6. In the existing **AIOStreams** config → `Addons` → `Custom Addon`, add the public manifest URL. Set the addon name exactly to **Xtream VOD Bridge** and, preferably, limit resources to `stream` if that option exists. **Do not delete or replace any installed addons.**
+
+7. In AIOStreams `Sorting`:
+   - Reorder the installed addons so **Xtream VOD Bridge is first**.
+   - Insert **Addon** as the **first** primary sort criterion for `Global`, and explicitly for `Movies` and `Series` if they already have their own sort criteria.
+   - Keep `Resolution`, `Quality`, `Language`, `Cached`, etc., **after** `Addon`. If `Cached` remains first it can split the result list and the IPTV result may not be on top. Prefer not to treat HTTP IPTV as debrid cached.
+   - Keep other addons as fallbacks. Verify filters such as `Cached-only`, `HTTP excluded`, `Title matching`, `Episode matching`, and quality thresholds do not accidentally discard IPTV VOD; change them **only for this addon** when the UI supports per-addon settings.
+
+**Expected:** If the movie is indexed, its IPTV result appears before other addons. If no mapped IPTV VOD exists, only your existing streams appear; other addons continue operating.
+
+## Tests and troubleshooting
+
+```bash
+# Before deploying (requires Python + packages from requirements.txt):
+python -m unittest discover -s tests -v
+
+# Health stats: item counts, items with metadata IDs, episode count, last sync:
+curl -sS http://127.0.0.1:18767/health
+
+# Force another batch of enrichment (from Linux only; use your own admin token):
+curl -sS -X POST http://127.0.0.1:18767/admin/refresh \
+  -H 'X-Admin-Token: REPLACE_WITH_ADMIN_TOKEN'
+
+# Query movie (substitute token/IMDb ID; show only a demo path):
+curl -sS "http://127.0.0.1:18767/a/YOUR_ADDON_TOKEN/stream/movie/tt0133093.json"
+
+# Query TV episode:
+curl -sS "http://127.0.0.1:18767/a/YOUR_ADDON_TOKEN/stream/series/tt0944947:1:1.json"
+```
+
+If you get `{"streams":[]}`: verify (1) full initial index has warmed up, (2) `health.index.movie.mapped` (or `series.mapped`) is nonzero, (3) IPTV detail endpoints really expose IMDb/TMDb IDs, (4) TMDb key if only TMDb IDs exist, (5) exact season/episode mapping, and (6) AIOStreams filters. Empty results do **not** mean the provider has no VOD unless the index is complete.
+
+## Safety, operation, backup, and rollback
+
+- **Deployment state:** a **prototype**, packaged/tested locally without real Xtream credentials, upstream network, or AIOStreams end-to-end integration. Test with one movie and one TV episode before production.
+- Provider credentials are held in `.env` in the Docker environment. Only host administrators with Docker permissions should access it; a person with Docker socket access can inspect environment variables. Do not publish the `.env` file or add it to Git.
+- An Xtream subscription may limit simultaneous connections or bind an IP; when using the byte-forwarding relay, the provider sees **HomeDocker's public egress IP**, not each remote device. Verify provider terms, rights, max sessions, and geographic limits.
+- Playback is **relayed through HomeDocker** (not transcoded); internet traffic and bandwidth flow through the home connection and Docker container. `Range`/`206` responses pass through. Some provider-specific redirects, HLS playlists, headers, token-based DRM, and exotic formats may require additional handling. HLS segment URL rewriting is **not** implemented in v0.1.1.
+- Use only with an IPTV provider and content you are authorized to access. Never proxy arbitrary target URLs supplied by users.
+- Health metrics show catalog counts, not credentials. Admin refresh requires a separate `X-Admin-Token`. Stream links use short-lived HMAC signatures. `access_log off` in the nginx location prevents signed URLs entering normal access logs. Avoid exposing debug logs containing secrets.
+- Backup/DR: include the named Docker volume `xtream_vod_index`, compose definition, nginx path config, and **`.env`/secrets** in your existing encrypted DR backup. SQLite hot copying is not consistent by default: quiesce the container or use SQLite backup API when staging. This is a **new app-specific backup policy**, not a change to Backrest/Restic/rclone.
+- Version Center: this local image is tagged `homedocker/xtream-vod-bridge:0.1.1`. It is **not** linked to a public registry release feed. The current stack can be discovered, but upstream-version comparison needs an explicit custom source if/when the project is published. Keep monitor-only.
+- Rollback: disable the Custom Addon in AIOStreams, remove the nginx location block, `sudo nginx -t && sudo systemctl reload nginx`, then `sudo docker compose down`. **Never run `down -v`** if you want to retain the indexed catalog.
+- Upgrade base image: this prototype uses `python:3.12-slim`; pin an exact verified image digest and dependency lock in production before strict reproducible DR. `requirements.txt` has bounded major versions, not a fully locked build.
+
+## Follow-up v0.2 hardening ideas
+
+- Multi-provider failover/priority per provider, not just one account.
+- Provider-list deltas/parallel throttled enrichment and progress UI for 10k+ items.
+- Title+year fallback with human-approval queue, not silent fuzzy mapping.
+- Per-title playback checks, optional direct-play mode versus secure relay.
+- HLS manifest/segment rewriting if the provider uses `.m3u8`, plus more player compatibility tests.
+- Image digests, migration-based schema versioning, `file`-based secrets, and automated end-to-end mocks.
+
+
+## GitHub repository workflow
+
+Repository: [`olivergiangvu/xtream-vod-bridge`](https://github.com/olivergiangvu/xtream-vod-bridge) (public source, **pre-production**). Public visibility does not make the streaming service safe to expose unauthenticated. This project does not ship provider playlists, credentials, stream URLs, or database exports. No open-source license has been granted yet; public visibility alone does not convey reuse rights. Default branch is `main`; require passing CI on pull requests where branch-protection features are available.
+
+- Develop on a short-lived branch and submit a pull request; avoid direct edits on `main`.
+- GitHub Actions runs syntax compilation and 6 offline unit tests; it does **not** call the IPTV provider, perform deployment, or pull secrets from HomeDocker.
+- `.env` and all provider credentials must remain only on HomeDocker, never inside GitHub, Actions logs or issue comments.
+- No automatic CD and no image publication in this prototype. Release tags and GitHub Container Registry should be added after integration tests and image reproducibility work.
+- Production checklist: see `docs/production-checklist.md`.
