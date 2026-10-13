@@ -14,12 +14,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import app as bridge
 import ops
+import admin_auth
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -28,6 +29,7 @@ BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
 @asynccontextmanager
 async def lifespan(_app):
     ops.init()
+    admin_auth.init()
     yield
 
 
@@ -53,10 +55,23 @@ async def security_headers(request, call_next):
     return response
 
 
-def authorize(authorization: str = Header(default="")):
+def authorize(request: Request, authorization: str = Header(default="")):
+    # Bearer compatibility exists for SSH/admin automation, but the browser
+    # uses a separate password-verified HttpOnly session.
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
-    if not bridge.ADMIN_TOKEN or not hmac.compare_digest(token, bridge.ADMIN_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": "Bearer"})
+    if bridge.ADMIN_TOKEN and hmac.compare_digest(token, bridge.ADMIN_TOKEN):
+        return
+    session = admin_auth.session_info(request.cookies.get(admin_auth.COOKIE))
+    if session:
+        if request.method in ("PUT", "POST", "PATCH", "DELETE"):
+            csrf = request.headers.get("x-csrf-token", "")
+            if not admin_auth.same_origin(request) or not hmac.compare_digest(
+                csrf, session["csrf"]
+            ):
+                raise HTTPException(status_code=403, detail="CSRF validation failed")
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized",
+                        headers={"WWW-Authenticate": "Bearer"})
 
 
 @console.get("/")
@@ -72,6 +87,47 @@ def main_health():
         return json.loads(data)
     except (urllib.error.URLError, ValueError, TimeoutError, OSError):
         return {"status": "offline", "version": None}
+
+
+@console.get("/api/auth/session")
+def auth_status(request: Request):
+    session = admin_auth.session_info(request.cookies.get(admin_auth.COOKIE))
+    return {
+        "authenticated": bool(session),
+        "csrf_token": session["csrf"] if session else None,
+        "password_ready": admin_auth.configured() and admin_auth.origin_configured(),
+    }
+
+
+@console.post("/api/auth/login")
+def auth_login(request: Request, response: Response, payload: dict[str, Any]):
+    if not admin_auth.same_origin(request):
+        raise HTTPException(status_code=403, detail="Secure origin required")
+    if set(payload) != {"password"}:
+        raise HTTPException(status_code=422, detail="Expected password only")
+    try:
+        session, csrf = admin_auth.login(payload["password"])
+    except admin_auth.LoginThrottled:
+        raise HTTPException(status_code=429, detail="Too many attempts; try later") from None
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid credentials") from None
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Admin password not configured") from None
+    response.set_cookie(
+        key=admin_auth.COOKIE,
+        value=session,
+        httponly=True, secure=True, samesite="strict",
+        path=admin_auth.COOKIE_PATH,
+        max_age=admin_auth.SESSION_SECONDS,
+    )
+    return {"authenticated": True, "csrf_token": csrf, "expires_in": admin_auth.SESSION_SECONDS}
+
+
+@console.post("/api/auth/logout", dependencies=[Depends(authorize)])
+def auth_logout(request: Request, response: Response):
+    admin_auth.delete_session(request.cookies.get(admin_auth.COOKIE))
+    response.delete_cookie(admin_auth.COOKIE, path=admin_auth.COOKIE_PATH)
+    return {"authenticated": False}
 
 
 @console.get("/api/overview", dependencies=[Depends(authorize)])
