@@ -141,29 +141,42 @@ class LoginThrottled(Exception):
 
 
 def login(password, username="owner"):
-    # Existing single Owner account. Keep the username check inside the
-    # password-verification flow so invalid usernames share rate limiting.
+    """Verify Owner or User credentials with the existing durable lockout."""
+    import admin_users
+
     if not origin_configured():
         raise RuntimeError("HTTPS public origin not configured")
     if not isinstance(password, str) or len(password) > 256:
         raise ValueError("Invalid credentials")
-    init()
+    admin_users.init()
     now = int(time.time())
+    valid = isinstance(username, str) and (
+        username == "owner" or bool(admin_users.USERNAME.fullmatch(username))
+    )
     with ops.database() as con:
         status = con.execute(
-            "SELECT attempts,window_start,locked_until "
-            "FROM admin_login_guard WHERE id=1"
+            "SELECT attempts,window_start,locked_until FROM admin_login_guard "
+            "WHERE id=1"
         ).fetchone()
         if status and status["locked_until"] > now:
             raise LoginThrottled()
-        account = con.execute(
+        owner = con.execute(
             "SELECT salt,digest,rounds FROM admin_password WHERE id=1"
         ).fetchone()
-        if account is None:
+        if owner is None:
             raise RuntimeError("Admin password not provisioned")
-        valid_username = (isinstance(username, str) and len(username) <= 64
-                          and hmac.compare_digest(username.encode("utf-8"), b"owner"))
-        good = _verify(password, account) and valid_username
+        if valid and username == "owner":
+            account = owner
+        elif valid:
+            account = con.execute(
+                "SELECT salt,digest,rounds FROM auth_users "
+                "WHERE username=? AND enabled=1", (username,)
+            ).fetchone()
+        else:
+            account = None
+        # Unknown users run a same-cost KDF without revealing account status.
+        candidate = account if account else (b"0" * 24, b"0" * 32, ITERATIONS)
+        good = _verify(password, candidate) and account is not None and valid
         if not good:
             attempts = 1
             if status and now - status["window_start"] <= WINDOW_SECONDS:
@@ -172,14 +185,12 @@ def login(password, username="owner"):
                             now - status["window_start"] <= WINDOW_SECONDS else now)
             locked_until = now + LOCK_SECONDS if attempts >= MAX_ATTEMPTS else 0
             con.execute(
-                "INSERT INTO admin_login_guard(id,attempts,window_start,locked_until)"
-                " VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                "INSERT INTO admin_login_guard(id,attempts,window_start,locked_until) "
+                "VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                 "attempts=excluded.attempts,window_start=excluded.window_start,"
                 "locked_until=excluded.locked_until",
                 (attempts, window_start, locked_until),
             )
-            # Do NOT throw while inside the transaction: it would roll back
-            # the failed-attempt counter, silently disabling lockout.
         else:
             con.execute("DELETE FROM admin_login_guard")
             session = secrets.token_urlsafe(36)
@@ -187,26 +198,35 @@ def login(password, username="owner"):
             digest = hashlib.sha256(session.encode()).hexdigest()
             con.execute("DELETE FROM admin_sessions WHERE expires_at <= ?", (now,))
             con.execute(
-                "INSERT INTO admin_sessions(session_digest,csrf,expires_at,created_at) "
-                "VALUES(?,?,?,?)",
-                (digest, csrf, now + SESSION_SECONDS, now),
+                "INSERT INTO admin_sessions(session_digest,csrf,expires_at,"
+                "created_at,username) VALUES(?,?,?,?,?)",
+                (digest, csrf, now + SESSION_SECONDS, now, username),
             )
+    # Must raise *after* transaction commits failed attempts.
     if not good:
         raise ValueError("Invalid credentials")
     return session, csrf
 
 
 def session_info(session):
-    if not isinstance(session, str) or len(session) < 32 or len(session) > 200:
+    """Session/role is checked against enabled user status on every request."""
+    import admin_users
+
+    if not isinstance(session, str) or not 32 <= len(session) <= 200:
         return None
+    admin_users.init()
     digest = hashlib.sha256(session.encode()).hexdigest()
     with ops.database() as con:
         row = con.execute(
-            "SELECT csrf,expires_at FROM admin_sessions "
+            "SELECT csrf,expires_at,username FROM admin_sessions "
             "WHERE session_digest=? AND expires_at>?",
             (digest, int(time.time())),
         ).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    principal = admin_users.principal(row["username"])
+    return {**dict(row), "role": principal["role"]} if principal else None
+
 
 
 def delete_session(session):
