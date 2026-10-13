@@ -353,3 +353,37 @@ def credential_revision(uid):
     if row is None:
         raise KeyError("Provider inactive or missing")
     return int(row[0])
+
+
+
+def import_legacy_config(base_url, username, password, label):
+    """One-time encrypted import of existing .env provider, never echo secrets."""
+    _cipher()
+    init()
+    with ops.database() as con:
+        row = con.execute(
+            "SELECT value FROM runtime_settings "
+            "WHERE key='legacy_migrated_provider_id'"
+        ).fetchone()
+        if row:
+            exists = con.execute(
+                "SELECT provider_id FROM provider_profiles WHERE provider_id=?",
+                (row["value"],),
+            ).fetchone()
+            if exists:
+                return {"id": row["value"], "status": "already_imported"}
+    created = create_profile({
+        "label": label,
+        "base_url": base_url,
+        "username": username,
+        "password": password,
+        "priority": 10,
+    })
+    with ops.database() as con:
+        con.execute(
+            "INSERT INTO runtime_settings(key,value,updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,"
+            "updated_at=excluded.updated_at",
+            ("legacy_migrated_provider_id", created["id"], int(time.time())),
+        )
+    return {"id": created["id"], "status": "staged_not_active"}
