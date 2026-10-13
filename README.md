@@ -26,6 +26,24 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
 
+## v0.4.1 candidate: Admin UI on existing HTTPS port 18450
+
+The HomeDocker administrator can use the **same** existing HTTPS listener as
+the AIOStreams addon without changing the manifest or video relay URLs:
+
+- Public addon: existing `/a/...`, `/play/...` routing to 127.0.0.1:18767
+- Admin UI: `https://olivergiangvu.asuscomm.com:18450/admin/` to 127.0.0.1:18768
+- Assets/API: relative URLs `/admin/assets/...` and `/admin/api/...`
+- Reverse proxy admin ACL: approved LAN addresses only, plus ADMIN_TOKEN on APIs
+
+**This patch is not yet installed on HomeDocker.** The existing admin service
+continues to work by SSH tunnel. Because 18450 is publicly forwarded, a
+router that source-NATs WAN traffic into a LAN address can bypass the nginx
+subnet ACL. Validate from a true external network (WAN must not reach the
+admin API at all) before enabling credential editing. See
+[shared 18450 setup and rollback](docs/admin-shared-18450.md) and
+[nginx location template](nginx-admin-18450.location.conf).
+
 ## v0.4.0 candidate: private admin console, Strand-style source label, diagnostics
 
 **This is a release candidate, not the v0.3.0 stable baseline.** The tested
