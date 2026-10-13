@@ -1,7 +1,7 @@
 services:
   xtream-vod-bridge:
     build: .
-    image: homedocker/xtream-vod-bridge:0.4.2
+    image: homedocker/xtream-vod-bridge:0.4.3
     container_name: xtream-vod-bridge
     restart: unless-stopped
     env_file: .env
@@ -23,7 +23,7 @@ services:
       retries: 3
       start_period: 15s
   xtream-vod-admin:
-    image: homedocker/xtream-vod-bridge:0.4.2
+    image: homedocker/xtream-vod-bridge:0.4.3
     container_name: xtream-vod-admin
     restart: unless-stopped
     depends_on:
