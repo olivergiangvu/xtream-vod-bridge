@@ -922,7 +922,13 @@ async def streams(token: str, media_type: str, media_id: str):
     if media_type == "movie" and season is not None:
         return {"streams": []}
     started = time.monotonic()
-    if media_type == "series" and ops.get("series_on_demand", SERIES_ON_DEMAND):
+    # Safety fallback: never hide the working legacy source if the provider
+    # router is disabled or no alternative provider is enabled.
+    legacy_visible = (ops.get("legacy_source_enabled", True)
+                      or not provider_router.has_active_provider())
+    if not legacy_visible:
+        rows = []
+    if media_type == "series" and legacy_visible and ops.get("series_on_demand", SERIES_ON_DEMAND):
         await hydrate_requested_episode(rows, int(season), int(episode))
     result = []
     for row in rows:
@@ -1005,8 +1011,9 @@ def valid_named_signature(kind, sid, media_id, exp, sig, filename):
     return hmac.compare_digest(expected, sig)
 
 
-def make_stream_client():
-    return httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0), follow_redirects=False,
+def make_stream_client(*, trust_env=True):
+    return httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0),
+                             follow_redirects=False, trust_env=trust_env,
                              limits=httpx.Limits(max_connections=10, max_keepalive_connections=4))
 
 
@@ -1088,6 +1095,10 @@ async def relay_stream(kind, sid, ext, request, filename=None, provider_id=None)
         except (KeyError, provider_store.RegistryUnavailable):
             raise HTTPException(404) from None
         upstream_base = config["base_url"]
+        try:
+            await provider_router.public_endpoint_or_raise(upstream_base)
+        except Exception:
+            raise HTTPException(502, "Provider endpoint not publicly routable") from None
         upstream_user = config["username"]
         upstream_password = config["password"]
     else:
@@ -1106,7 +1117,7 @@ async def relay_stream(kind, sid, ext, request, filename=None, provider_id=None)
     if request.headers.get("range"):
         headers["Range"] = request.headers["range"]
     method = request.method
-    client = make_stream_client()
+    client = make_stream_client(trust_env=provider_id is None)
     try:
         # Redirects only to original provider host or explicitly approved CDN hosts.
         # Never use automatic redirects with an untrusted Location target.
