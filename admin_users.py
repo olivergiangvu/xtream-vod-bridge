@@ -57,6 +57,7 @@ def principal(username):
 
 
 def find_for_login(username):
+    init()
     if not isinstance(username, str) or not USERNAME.fullmatch(username):
         return None
     with ops.database() as con:
@@ -67,6 +68,7 @@ def find_for_login(username):
 
 
 def list_users():
+    init()
     with ops.database() as con:
         rows = con.execute(
             "SELECT username,role,enabled,created_at,updated_at "
@@ -79,6 +81,7 @@ def list_users():
 
 
 def create_user(username, password):
+    init()
     validate_username(username)
     if not admin_auth.password_is_strong(password):
         raise ValueError("Use a strong password (14–128 printable characters)")
@@ -103,6 +106,7 @@ def create_user(username, password):
 
 
 def change_user(username, *, enabled=None, password=None):
+    init()
     validate_username(username)
     if enabled is None and password is None:
         raise ValueError("No changes")
@@ -137,6 +141,7 @@ def change_user(username, *, enabled=None, password=None):
 
 
 def delete_user(username):
+    init()
     validate_username(username)
     with ops.database() as con:
         # v0.5 foreign-key source ownership is retained on account deletion;
