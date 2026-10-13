@@ -1,5 +1,12 @@
 # LAN access to HomeDocker Xtream Admin, without exposing credentials
 
+**Alternate plan superseded for this HomeDocker deployment:** the user selected
+the existing HTTPS port 18450 and a relative /admin/ path instead of a new
+18769 listener. See [admin-shared-18450.md](admin-shared-18450.md). This
+18769 document remains a more strongly network-isolated fallback if the
+public port's LAN ACL can be bypassed by WAN source NAT. Do not deploy both
+nginx templates by default.
+
 The v0.4 pilot admin currently runs on `127.0.0.1:18768`, and an unauthenticated
 call to `/api/overview` returned **401**. Keep this safe default unchanged.
 
