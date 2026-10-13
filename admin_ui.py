@@ -97,6 +97,8 @@ def overview():
 
 @console.put("/api/settings", dependencies=[Depends(authorize)])
 def settings(payload: dict[str, Any]):
+    if payload.get("legacy_source_enabled") is False and not provider_router.has_active_provider():
+        raise HTTPException(409, "Keep legacy visible until at least one provider is active")
     try:
         updated = ops.update(payload)
     except ValueError as exc:
@@ -198,3 +200,21 @@ def provider_activation(provider_id: str, payload: dict[str, Any]):
         raise HTTPException(503, "Provider encryption key is unavailable") from None
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+
+
+
+@console.post("/api/providers/import-legacy", dependencies=[Depends(authorize)])
+def import_legacy_provider():
+    if not provider_router.ENABLED:
+        raise HTTPException(409, "Multi-provider router disabled")
+    if not provider_store.installed():
+        raise HTTPException(503, "Provider encryption key unavailable")
+    try:
+        return provider_store.import_legacy_config(
+            bridge.BASE, bridge.USER, bridge.PASSWORD, ops.get("source_label")
+        )
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key unavailable") from None
+    except ValueError:
+        # Do not echo a credential URL or password in error messages.
+        raise HTTPException(422, "Legacy provider cannot be imported") from None
