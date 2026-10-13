@@ -831,6 +831,9 @@ def authorized(token):
 
 @app.get("/a/{token}/manifest.json")
 async def manifest(token: str):
+    if token.startswith("v5_"):
+        import personal_playback
+        return personal_playback.manifest(token)
     authorized(token)
     return {"id": "org.homedocker.xtreamvod", "version": VERSION,
             "name": "Xtream VOD Bridge", "description": "Private Xtream VOD HTTP streams by verified IMDb/TMDb IDs",
@@ -867,6 +870,9 @@ def records_for(kind, imdb_id=None, tmdb_id=None, anime_kind=None, anime_id=None
 
 @app.get("/a/{token}/stream/{media_type}/{media_id}.json")
 async def streams(token: str, media_type: str, media_id: str):
+    if token.startswith("v5_"):
+        import personal_playback
+        return personal_playback.streams(token, media_type, media_id)
     authorized(token)
     if media_type not in ("movie", "series") or (media_type == "series" and MOVIES_ONLY):
         return {"streams": []}
@@ -1094,3 +1100,19 @@ async def relay_stream(kind, sid, ext, request, filename=None):
         return Response(content=b"", status_code=upstream.status_code, headers=out_headers)
     return StreamingResponse(chunks(), status_code=upstream.status_code, headers=out_headers,
                              background=BackgroundTask(client.aclose))
+
+
+@app.api_route(
+    "/play/v5/{manifest_id}/{source_id}/{kind}/{item_key}/{stream_key}/"
+    "{identity}/{exp}/{signature}/{filename}",
+    methods=["GET", "HEAD"],
+)
+async def play_personal_v5(manifest_id: str, source_id: str, kind: str,
+                           item_key: str, stream_key: str, identity: str,
+                           exp: str, signature: str, filename: str,
+                           request: Request):
+    import personal_playback
+    return await personal_playback.relay(
+        manifest_id, source_id, kind, item_key, stream_key, identity,
+        exp, signature, filename, request,
+    )
