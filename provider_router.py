@@ -262,7 +262,11 @@ def valid_signature(uid, kind, sid, identity, expiry, signature, filename, bridg
         return False
     if exp < time.time() or exp > time.time() + bridge.PLAY_HOURS * 3600 + 120:
         return False
-    payload = f"v3:{uid}:{kind}:{sid}:{identity}:{exp}:{filename}"
+    try:
+        revision = vault.credential_revision(uid)
+    except (KeyError, vault.RegistryUnavailable):
+        return False
+    payload = f"v3:{uid}:{revision}:{kind}:{sid}:{identity}:{exp}:{filename}"
     mac = hmac.new(bridge.SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(mac, signature or "")
 
