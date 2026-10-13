@@ -71,7 +71,8 @@ location ^~ /admin-signin/ {
     client_max_body_size 4k;
     access_log off;
     add_header Cache-Control "no-store" always;
-    add_header Referrer-Policy "no-referrer" always;
+    # Native login form POST needs Origin != null; never use no-referrer here.
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 """
 
