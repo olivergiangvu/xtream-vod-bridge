@@ -39,6 +39,14 @@ class SafariFormGatewayTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('form-action &#x27;self&#x27;', response.headers.get("Content-Security-Policy", "").replace("'", "&#x27;"))
         self.assertIn('action="/admin-signin/"', response.text)
+        # no-referrer sets Origin:null for native HTML form POST per Fetch.
+        self.assertIn(
+            '<meta name="referrer" content="strict-origin-when-cross-origin">',
+            response.text
+        )
+        self.assertEqual(
+            response.headers["Referrer-Policy"], "strict-origin-when-cross-origin"
+        )
         self.assertIn("No separate nginx Gateway", response.text)
         self.assertNotIn(PASSWORD, response.text)
         nonce = re.search(r'name="nonce" value="([^"]+)"', response.text).group(1)
@@ -57,6 +65,34 @@ class SafariFormGatewayTests(unittest.TestCase):
             headers={"Origin": origin, "Cookie": cookie},
             follow_redirects=False
         )
+
+    def test_non_login_admin_response_keeps_no_referrer(self):
+        response = self.client.get("/api/auth/session")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
+
+    def test_nginx_login_referrer_header_and_one_time_patcher(self):
+        import importlib.util
+        root = Path(__file__).resolve().parents[1]
+        installer = (root / "scripts" / "install_safari_form_gateway.py").read_text()
+        self.assertIn(
+            'add_header Referrer-Policy "strict-origin-when-cross-origin" always;',
+            installer
+        )
+        patcher_file = root / "scripts" / "fix_safari_login_referrer_policy.py"
+        spec = importlib.util.spec_from_file_location("safari_referrer_fixer", patcher_file)
+        fixer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixer)
+        original = fixer.OLD + "\n"
+        with patch.object(fixer, "SNIPPET", Path(self.temp.name) / "current.conf"):
+            Path(fixer.SNIPPET).write_text(original)
+            self.assertEqual(Path(fixer.SNIPPET).read_text().count(fixer.OLD), 1)
+        self.assertEqual(
+            fixer.login_policy("HTTP/1.1 200 OK\r\nReferrer-Policy: "
+                               "strict-origin-when-cross-origin\r\n"),
+            ["strict-origin-when-cross-origin"]
+        )
+        self.assertEqual(fixer.NEW.count("strict-origin-when-cross-origin"), 1)
 
     def test_cookie_session_redirect_and_gateway_check(self):
         nonce = self.open_form()
