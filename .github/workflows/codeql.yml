@@ -2,7 +2,7 @@ name: CodeQL security scan
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/v0.5-provider-registry-foundation']
   pull_request:
     branches: [main]
   schedule:
