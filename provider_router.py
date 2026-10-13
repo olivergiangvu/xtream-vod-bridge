@@ -372,3 +372,24 @@ def health():
     return {"enabled": True, "profiles": profiles[0],
             "active": profiles[1] or 0, "indexed": indexed,
             "counters": dict(COUNTERS)}
+
+
+
+def has_active_provider():
+    if not ENABLED:
+        return False
+    try:
+        with ops.database() as con:
+            return bool(con.execute(
+                "SELECT 1 FROM provider_profiles WHERE enabled=1 LIMIT 1"
+            ).fetchone())
+    except Exception:
+        return False
+
+
+async def public_endpoint_or_raise(base_url):
+    parsed = urlsplit(base_url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise RuntimeError("Provider base must be HTTPS")
+    if not await asyncio.to_thread(_public_dns_hostname, parsed.hostname):
+        raise RuntimeError("Provider DNS destination is not public")
