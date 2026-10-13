@@ -10,6 +10,7 @@ const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
 let privateManifest = '';
 let adminIdentity = {username: '', role: ''};
+let resetTarget = '';
 
 
 async function api(path, method = 'GET', value = undefined) {
@@ -109,12 +110,20 @@ async function showDashboard() {
   const writable = adminIdentity.role !== 'viewer';
   for (const el of $('settingsForm').querySelectorAll('input,button')) el.disabled = !writable;
   if (adminIdentity.role === 'owner') await loadAdminAccounts();
-  const manifest = await api('/api/manifest');
-  privateManifest = manifest.url;
-  $('manifestUrl').type = 'password';
-  $('manifestUrl').value = privateManifest;
-  $('manifestReveal').textContent = 'Show';
-  $('manifestStatus').textContent = 'Manifest ready · private addon credential';
+  if (adminIdentity.role !== 'viewer') {
+    const manifest = await api('/api/manifest');
+    privateManifest = manifest.url;
+    $('manifestUrl').type = 'password';
+    $('manifestUrl').value = privateManifest;
+    $('manifestReveal').textContent = 'Show';
+    $('manifestStatus').textContent = 'Manifest ready · private addon credential';
+  } else {
+    privateManifest = '';
+    $('manifestUrl').value = '';
+    $('manifestStatus').textContent = 'Restricted to Owner/Admin accounts';
+    $('manifestCopy').disabled = true;
+    $('manifestReveal').disabled = true;
+  }
   $('secret').value = '';
   $('legacySecret').value = '';
   $('login').hidden = true;
@@ -294,17 +303,12 @@ async function loadAdminAccounts() {
       reset.className = 'ghost';
       reset.type = 'button';
       reset.textContent = 'Reset password';
-      reset.addEventListener('click', async () => {
-        const password = window.prompt('New password for ' + account.username + ' (14+ characters)');
-        if (!password) return;
-        try {
-          await api('/api/admin-users/' + encodeURIComponent(account.username),
-                    'PATCH', {password});
-          $('adminUsersMessage').textContent = 'Password changed; prior sessions revoked.';
-          await loadAdminAccounts();
-        } catch (e) {
-          $('adminUsersMessage').textContent = e.message;
-        }
+      reset.addEventListener('click', () => {
+        resetTarget = account.username;
+        $('resetAdminPasswordTitle').textContent = 'Reset password for ' + resetTarget;
+        $('resetAdminPassword').value = '';
+        $('resetAdminPasswordForm').hidden = false;
+        $('resetAdminPassword').focus();
       });
       wrap.append(reset);
       const del = document.createElement('button');
@@ -342,4 +346,27 @@ $('createAdminForm').addEventListener('submit', async (event) => {
   } finally {
     $('newAdminPassword').value = '';
   }
+});
+
+
+$('resetAdminPasswordForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  if (!resetTarget) return;
+  try {
+    await api('/api/admin-users/' + encodeURIComponent(resetTarget),
+              'PATCH', {password: $('resetAdminPassword').value});
+    $('adminUsersMessage').textContent = 'Password changed; prior sessions revoked.';
+    resetTarget = '';
+    $('resetAdminPasswordForm').hidden = true;
+    await loadAdminAccounts();
+  } catch (e) {
+    $('adminUsersMessage').textContent = e.message;
+  } finally {
+    $('resetAdminPassword').value = '';
+  }
+});
+$('cancelAdminReset').addEventListener('click', () => {
+  resetTarget = '';
+  $('resetAdminPassword').value = '';
+  $('resetAdminPasswordForm').hidden = true;
 });
