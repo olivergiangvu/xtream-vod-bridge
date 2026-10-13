@@ -161,15 +161,35 @@ def get_owned(owner, source_id):
     return row
 
 
+def _invalidate_index(con, source_id, *, remove_manifest_mapping=False):
+    # These tables are created only in the v0.5c playback stage; source
+    # management still works in the earlier v0.5a code.
+    tables = {row["name"] for row in con.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    for table in ("tenant_media", "tenant_episodes", "tenant_sync_guard"):
+        if table in tables:
+            con.execute(f"DELETE FROM {table} WHERE source_id=?", (source_id,))
+    if remove_manifest_mapping and "manifest_sources" in tables:
+        con.execute(
+            "DELETE FROM manifest_sources WHERE source_id=?", (source_id,)
+        )
+
+
 def remove_owned(owner, source_id):
     init()
     with ops.database() as con:
-        removed = con.execute(
+        existing = con.execute(
+            "SELECT 1 FROM vod_sources WHERE owner=? AND source_id=?",
+            (owner, source_id),
+        ).fetchone()
+        if not existing:
+            raise KeyError("Source not found")
+        _invalidate_index(con, source_id, remove_manifest_mapping=True)
+        con.execute(
             "DELETE FROM vod_sources WHERE owner=? AND source_id=?",
             (owner, source_id),
         )
-        if removed.rowcount != 1:
-            raise KeyError("Source not found")
 
 
 def change_owned(owner, source_id, *, name=None, enabled=None, config=None):
@@ -190,6 +210,10 @@ def change_owned(owner, source_id, *, name=None, enabled=None, config=None):
         )
         status = "untested"
     with ops.database() as con:
+        if config is not None:
+            # Old Stremio links must no longer resolve to previous provider
+            # rows after a source's credentials or upstream URL is replaced.
+            _invalidate_index(con, source_id)
         con.execute(
             "UPDATE vod_sources SET title=?,enabled=?,config_ciphertext=?,"
             "status=?,updated_at=? WHERE source_id=? AND owner=?",
