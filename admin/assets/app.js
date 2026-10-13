@@ -196,17 +196,40 @@ $('refresh').addEventListener('click', async () => {
   try { await refresh(false); } catch (error) { $('bridgeState').textContent = error.message; }
 });
 
+// The nginx session gate protects all /admin/ URLs, including its JSON APIs.
+// After revoking the session, never show the obsolete in-page login form there:
+// login must restart at the public /admin-signin/ gateway instead.
 $('logout').addEventListener('click', async () => {
-  if (!adminToken && csrfToken) {
-    try { await api('/api/auth/logout', 'POST'); } catch (_) {}
+  $('logout').disabled = true;
+  try {
+    if (!adminToken) {
+      if (!csrfToken) throw new Error('Session state unavailable; reload and retry.');
+      const result = await api('/api/auth/logout', 'POST');
+      if (result.authenticated !== false) {
+        throw new Error('Server did not confirm session revocation.');
+      }
+    }
+    adminToken = '';
+    csrfToken = '';
+    if (polling) { clearInterval(polling); polling = null; }
+    $('secret').value = '';
+    $('legacySecret').value = '';
+    $('sourceLabel').value = '';
+    if (window.location.pathname.startsWith('/admin/')) {
+      window.location.replace('/admin-signin/');
+      return;
+    }
+    // Retain the legacy in-page form ONLY for direct loopback/SSH admin URLs.
+    $('main').hidden = true;
+    $('login').hidden = false;
+    $('refresh').hidden = true; $('logout').hidden = true;
+    $('bridgeState').textContent = 'Not connected';
+    $('loginError').textContent = '';
+  } catch (error) {
+    // A failed logout must not masquerade as a successfully locked session.
+    $('bridgeState').textContent = 'Lock failed: ' + error.message;
+    $('bridgeState').className = 'state warn';
+  } finally {
+    $('logout').disabled = false;
   }
-  adminToken = '';
-  csrfToken = '';
-  if (polling) { clearInterval(polling); polling = null; }
-  $('main').hidden = true;
-  $('login').hidden = false;
-  $('refresh').hidden = true; $('logout').hidden = true;
-  $('bridgeState').textContent = 'Not connected';
-  $('sourceLabel').value = '';
-  $('loginError').textContent = '';
 });
