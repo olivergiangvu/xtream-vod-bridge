@@ -20,7 +20,7 @@ from pathlib import Path
 
 EXPECTED_BLOBS = {
     "admin_ui.py": "af816e9f9f40c02b7dcb3dc2217de3898103d19c",
-    "admin_auth.py": "17523fedf7a5e98027a5e09643ac80dcbdde9b50",
+    "admin_auth.py": "ecd3cd695c2046357d7fe36cd4458bff5ddd7774",
 }
 HOST_ROOT = Path("/opt/xtream-vod-bridge")
 
@@ -132,7 +132,8 @@ def prepare(root: Path, source_dir: Path):
         ),
         (
             '        good = _verify(password, account)\n        if not good:\n',
-            '        valid_username = isinstance(username, str) and hmac.compare_digest(username, "owner")\n'
+            '        valid_username = (isinstance(username, str) and len(username) <= 64\n'
+            '                          and hmac.compare_digest(username.encode("utf-8"), b"owner"))\n'
             '        good = _verify(password, account) and valid_username\n'
             '        if not good:\n',
             "rate-limited username matching",
