@@ -92,6 +92,7 @@ $('loginForm').addEventListener('submit', async (event) => {
   adminToken = candidate;
   try {
     await refresh(true);
+    await loadProviders();
     $('secret').value = '';
     $('login').hidden = true; $('main').hidden = false;
     $('refresh').hidden = false; $('logout').hidden = false;
@@ -142,4 +143,128 @@ $('logout').addEventListener('click', () => {
   $('bridgeState').textContent = 'Not connected';
   $('sourceLabel').value = '';
   $('loginError').textContent = '';
+});
+
+
+// Provider manager (staged/vault-only; no playback activation in this build).
+let activeProviderId = null;
+let profiles = [];
+
+function clearProviderForm() {
+  activeProviderId = null;
+  $('providerForm').reset();
+  $('providerPriority').value = '100';
+  $('providerPassword').value = '';
+  $('providerPassword').type = 'password';
+  $('showProviderPassword').textContent = 'Show';
+  $('providerPassword').required = true;
+  $('passwordHint').textContent = 'required for new profiles';
+  $('providerFormTitle').textContent = 'Add a provider';
+  $('providerSave').textContent = 'Save encrypted profile';
+}
+
+function providerText(name, text) {
+  const el = document.createElement(name);
+  el.textContent = text;
+  return el;
+}
+
+function drawProviders() {
+  const root = $('providerRows');
+  root.replaceChildren();
+  if (!profiles.length) {
+    root.append(providerText('p', 'No encrypted provider profiles yet. Your existing .env provider continues to work independently.'));
+    return;
+  }
+  for (const p of profiles) {
+    const item = document.createElement('div');
+    item.className = 'provider-entry';
+    const detail = document.createElement('div');
+    detail.append(providerText('strong', p.label));
+    const description = providerText('div', p.base_url + ' · ' + p.username + ' · Priority ' + p.priority);
+    description.className = 'small muted';
+    detail.append(description);
+    const badge = providerText('div', 'Staged · not streaming');
+    badge.className = 'small muted';
+    detail.append(badge);
+    const buttons = document.createElement('div');
+    buttons.className = 'buttons';
+    const edit = providerText('button', 'Edit');
+    edit.type = 'button';
+    edit.className = 'ghost';
+    edit.addEventListener('click', () => {
+      activeProviderId = p.id;
+      $('providerLabel').value = p.label;
+      $('providerUrl').value = p.base_url;
+      $('providerUsername').value = p.username;
+      $('providerPriority').value = p.priority;
+      $('providerPassword').value = '';
+      $('providerPassword').required = false;
+      $('providerPassword').type = 'password';
+      $('passwordHint').textContent = 'leave blank to keep saved password';
+      $('providerFormTitle').textContent = 'Edit ' + p.label;
+      $('providerSave').textContent = 'Save changes';
+      $('providerLabel').focus();
+    });
+    const del = providerText('button', 'Delete');
+    del.type = 'button'; del.className = 'ghost';
+    del.addEventListener('click', async () => {
+      if (!window.confirm('Delete staged provider profile "' + p.label + '"?')) return;
+      try {
+        await api('/api/providers/' + encodeURIComponent(p.id), 'DELETE');
+        if (p.id === activeProviderId) clearProviderForm();
+        await loadProviders();
+      } catch (e) {
+        $('providerSaveStatus').textContent = e.message;
+      }
+    });
+    buttons.append(edit, del);
+    item.append(detail, buttons);
+    root.append(item);
+  }
+}
+
+async function loadProviders() {
+  const data = await api('/api/providers');
+  const unlocked = data.key_configured === true;
+  $('providerKey').textContent = unlocked ? 'Encrypted key ready' : 'Encryption key not provisioned';
+  $('providerSave').disabled = !unlocked;
+  if (!unlocked) {
+    $('providerSaveStatus').textContent = 'Provider vault is read-only until the server key file is securely mounted.';
+  }
+  profiles = data.providers || [];
+  drawProviders();
+}
+
+$('providerForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const payload = {
+    label: $('providerLabel').value.trim(),
+    base_url: $('providerUrl').value.trim(),
+    username: $('providerUsername').value,
+    priority: Number.parseInt($('providerPriority').value, 10),
+  };
+  const password = $('providerPassword').value;
+  if (password || !activeProviderId) payload.password = password;
+  $('providerSave').disabled = true;
+  $('providerSaveStatus').textContent = 'Encrypting…';
+  try {
+    const isEdit = Boolean(activeProviderId);
+    await api(isEdit ? '/api/providers/' + encodeURIComponent(activeProviderId) : '/api/providers',
+              isEdit ? 'PATCH' : 'POST', payload);
+    $('providerSaveStatus').textContent = 'Encrypted profile saved. Streaming remains disabled during migration.';
+    clearProviderForm();
+    await loadProviders();
+  } catch (e) {
+    $('providerSaveStatus').textContent = e.message;
+  } finally {
+    if ($('providerKey').textContent === 'Encrypted key ready') $('providerSave').disabled = false;
+    $('providerPassword').value = '';
+  }
+});
+$('providerReset').addEventListener('click', clearProviderForm);
+$('showProviderPassword').addEventListener('click', () => {
+  const field = $('providerPassword');
+  field.type = field.type === 'password' ? 'text' : 'password';
+  $('showProviderPassword').textContent = field.type === 'password' ? 'Show' : 'Hide';
 });
