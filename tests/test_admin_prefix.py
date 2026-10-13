@@ -110,7 +110,7 @@ class AdminPrefixTests(unittest.TestCase):
             return next(line.partition(": ")[2] for line in block.splitlines()
                         if line.startswith("    image: "))
         self.assertEqual(image(main), image(admin))
-        self.assertEqual(image(admin), "homedocker/xtream-vod-bridge:0.4.2.1")
+        self.assertEqual(image(admin), "homedocker/xtream-vod-bridge:0.4.2.2")
 
     def test_prefix_ui_does_not_include_sensitive_tokens(self):
         html = self.client.get("/")
