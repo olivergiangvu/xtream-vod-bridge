@@ -122,11 +122,11 @@ class SafariFormGatewayTests(unittest.TestCase):
             "Host": "olivergiangvu.asuscomm.com",
             "X-Forwarded-Proto": "https",
         }
-        for missing_nonce in ("forged", ""):
+        for missing_nonce, expected_status in (("forged", 403), ("", 400)):
             r = self.client.post("/gateway/",
                 data={"password": PASSWORD, "nonce": missing_nonce},
                 headers=headers, follow_redirects=False)
-            self.assertEqual(r.status_code, 403)
+            self.assertEqual(r.status_code, expected_status)
 
     def test_page_reuses_existing_session_and_password_lockout(self):
         nonce = self.open_form()
