@@ -58,7 +58,8 @@ class ManifestAdminTests(unittest.TestCase):
                      patch.object(bridge, "ADDON_TOKEN", token):
                     r = self.client.get("/api/manifest", headers=self.auth)
                     self.assertEqual(r.status_code, 503)
-                    self.assertNotIn(token, r.text)
+                    if token:
+                        self.assertNotIn(token, r.text)
 
     def test_manifest_ui_requires_explicit_reveal_and_never_stores_token(self):
         html = (ROOT / "admin/index.html").read_text()
