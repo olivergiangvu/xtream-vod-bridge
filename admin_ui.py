@@ -138,9 +138,45 @@ def gateway_login_page(request: Request):
     return result
 
 
+def _gateway_post_origin_allowed(request: Request) -> bool:
+    """Conservative fallback for Safari native HTML form POST.
+
+    Safari can omit Origin for a native form submission (not fetch). Explicit
+    Origin or Referer, when present, MUST match an approved HTTPS origin.
+    Missing Origin is accepted only on the configured HTTPS vhost and when
+    Fetch Metadata does not indicate a cross-origin request. The independent
+    random double-submit nonce remains mandatory in gateway_login_submit.
+    This exception does NOT weaken same_origin() for JSON/CSRF APIs.
+    """
+    if not admin_auth.origin_configured():
+        return False
+    origin = request.headers.get("origin")
+    if origin is not None:
+        if origin not in admin_auth.allowed_origins():
+            return False
+    else:
+        # Nginx overwrites these headers to known values before proxying.
+        if request.headers.get("x-forwarded-proto") != "https":
+            return False
+        hostname = request.headers.get("host", "").split(":", 1)[0].lower()
+        from urllib.parse import urlsplit
+        if hostname not in {
+            urlsplit(item).hostname for item in admin_auth.allowed_origins()
+        }:
+            return False
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site and fetch_site not in ("same-origin", "none"):
+        return False
+    referer = request.headers.get("referer")
+    if referer and not any(referer.startswith(item + "/")
+                           for item in admin_auth.allowed_origins()):
+        return False
+    return True
+
+
 @console.post("/gateway/", response_class=HTMLResponse)
 async def gateway_login_submit(request: Request):
-    if not admin_auth.same_origin(request):
+    if not _gateway_post_origin_allowed(request):
         raise HTTPException(403, "Invalid HTTPS origin")
     body = await request.body()
     if len(body) > 2048:
