@@ -468,7 +468,7 @@ async def on_demand_series_info(row, season, episode):
             return
         # A successful detail fetch also caches negative episode lookups. New
         # episodes become eligible again after TTL (default 6 hours).
-        if persisted["checked_at"] > now - ops.get("series_jit_ttl_hours") * 3600:
+        if persisted["checked_at"] > now - ops.get("series_jit_ttl_hours", SERIES_JIT_TTL / 3600) * 3600:
             JIT_STATS["negative_cache"] += 1
             return
         if JIT_RETRY_AFTER.get(series_id, 0) > time.monotonic():
@@ -513,17 +513,17 @@ async def on_demand_series_info(row, season, episode):
             raise
         except Exception as exc:
             JIT_STATS["fetch_failed"] += 1
-            JIT_RETRY_AFTER[series_id] = time.monotonic() + ops.get("series_jit_retry_seconds")
+            JIT_RETRY_AFTER[series_id] = time.monotonic() + ops.get("series_jit_retry_seconds", SERIES_JIT_RETRY_SECONDS)
             ops.event("series_jit", "series", "error")
             LOG.warning("Series JIT unavailable error=%s", type(exc).__name__)
 
 
 async def hydrate_requested_episode(rows, season, episode):
     """Independent Series variants; bound *entire* request wall time."""
-    if not ops.get("series_on_demand") or MOVIES_ONLY or not rows:
+    if not ops.get("series_on_demand", SERIES_ON_DEMAND) or MOVIES_ONLY or not rows:
         return
     candidates = []
-    for row in rows[:ops.get("series_jit_max_variants")]:
+    for row in rows[:ops.get("series_jit_max_variants", SERIES_JIT_MAX_VARIANTS)]:
         if episode_rows(row["item_id"], season, episode):
             JIT_STATS["cache_hit"] += 1
         else:
@@ -533,7 +533,7 @@ async def hydrate_requested_episode(rows, season, episode):
     tasks = [asyncio.create_task(on_demand_series_info(row, season, episode))
              for row in candidates]
     try:
-        done, pending = await asyncio.wait(tasks, timeout=ops.get("series_jit_timeout_seconds"))
+        done, pending = await asyncio.wait(tasks, timeout=ops.get("series_jit_timeout_seconds", SERIES_JIT_TIMEOUT))
         if pending:
             JIT_STATS["timeout"] += len(pending)
             ops.event("series_jit", "series", "timeout", amount=len(pending))
@@ -701,7 +701,7 @@ async def sync_all():
             else:
                 # Avoid starvation: always reserve Series detail requests first,
                 # while keeping the original total MAX_ENRICH cap unchanged.
-                series_budget = min(MAX_ENRICH, ops.get("series_enrich_per_sync"), pending_count("series"))
+                series_budget = min(MAX_ENRICH, ops.get("series_enrich_per_sync", SERIES_SYNC_QUOTA), pending_count("series"))
             series_enriched = await enrich_items(kind="series", limit=series_budget)
             movie_enriched = await enrich_items(kind="movie", limit=MAX_ENRICH - series_budget)
             enriched = series_enriched + movie_enriched
@@ -803,7 +803,7 @@ async def health():
     return {"status": "ok", "version": VERSION, "last_sync": LAST_RUN["list_sync"],
             "enriched_last_sync": LAST_RUN["enriched"], "last_error": LAST_RUN["last_error"],
             "index": stats, "episodes": episode_count,
-            "series_on_demand": ops.get("series_on_demand") and not MOVIES_ONLY,
+            "series_on_demand": ops.get("series_on_demand", SERIES_ON_DEMAND) and not MOVIES_ONLY,
             "jit": dict(JIT_STATS),
             "series_progress": {"details_checked": series_checked,
                                 "with_episodes": series_with_episodes,
@@ -895,7 +895,7 @@ async def streams(token: str, media_type: str, media_id: str):
     if media_type == "movie" and season is not None:
         return {"streams": []}
     started = time.monotonic()
-    if media_type == "series" and ops.get("series_on_demand"):
+    if media_type == "series" and ops.get("series_on_demand", SERIES_ON_DEMAND):
         await hydrate_requested_episode(rows, int(season), int(episode))
     result = []
     for row in rows:
