@@ -2,9 +2,9 @@ name: CodeQL security scan
 
 on:
   push:
-    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay']
+    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay', 'fix/v0.4.2-safari-form-login']
   pull_request:
-    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay']
+    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay', 'fix/v0.4.2-safari-form-login']
   schedule:
     - cron: '43 3 * * 2'
   workflow_dispatch:
