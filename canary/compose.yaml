@@ -1,0 +1,63 @@
+# Isolated local-only v0.5 canary; never mix with /opt/xtream-vod-bridge.
+# Export CANARY_DIR and CANARY_IMAGE before running docker compose.
+# The bridge's 18769/admin's 18770 are bound on 127.0.0.1 only.
+services:
+  xtream-vod-bridge:
+    image: ${CANARY_IMAGE:?CANARY_IMAGE must be set}
+    pull_policy: never
+    container_name: xtream-vod-canary-playback
+    restart: "no"
+    env_file:
+      - ${CANARY_DIR:?CANARY_DIR must be set}/secrets/canary.env
+    ports:
+      - "127.0.0.1:18769:8767"
+    volumes:
+      - ${CANARY_DIR}/data:/data
+    networks:
+      - private_canary
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+  xtream-vod-admin:
+    image: ${CANARY_IMAGE:?CANARY_IMAGE must be set}
+    pull_policy: never
+    container_name: xtream-vod-canary-admin
+    restart: "no"
+    depends_on:
+      xtream-vod-bridge:
+        condition: service_healthy
+    env_file:
+      - ${CANARY_DIR:?CANARY_DIR must be set}/secrets/canary.env
+    command: ["uvicorn", "admin_ui:console", "--host", "0.0.0.0", "--port", "8768", "--no-access-log"]
+    ports:
+      - "127.0.0.1:18770:8768"
+    volumes:
+      - ${CANARY_DIR}/data:/data
+    networks:
+      - private_canary
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8768/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+networks:
+  private_canary:
+    internal: true
