@@ -44,7 +44,7 @@ def init():
 def _username(s):
     if not isinstance(s, str):
         raise ValueError("Invalid account username")
-    cleaned = s.strip().lower()
+    cleaned = s.strip()
     if not USERNAME.fullmatch(cleaned) or cleaned == "owner":
         raise ValueError("Use 3–32 lowercase letters, digits, _ or -, excluding owner")
     return cleaned
