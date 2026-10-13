@@ -1,6 +1,6 @@
 # Xtream VOD Bridge v0.4.0 — HomeDocker
 
-**Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
+**Status:** v0.3.0 is a functionally validated HomeDocker stable baseline (Movie/Series Range 206 and AIOStreams episode tests PASS); it is **not an independent security-certified public production release**. v0.4.0 remains a separate admin UI candidate pending a controlled HomeDocker pilot.
 
 **Goal:** Turn an **authorized** Xtream Codes IPTV provider's VOD movies and TV episodes into standard Stremio addon `stream` results, then use AIOStreams **Custom Addon + Addon-first sorting** to put them above other sources. Works without editing AIOStreams/AIOMetadata, Remux, or Trellis.
 
