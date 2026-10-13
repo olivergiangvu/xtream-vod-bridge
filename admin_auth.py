@@ -44,6 +44,9 @@ def _public_origin():
 
 
 PUBLIC_ORIGIN = _public_origin()
+# Optional .local hostname served with its own trusted certificate.
+# Never infer this from untrusted Host headers or broaden WAN access.
+LAN_ORIGIN = os.getenv("ADMIN_LAN_ORIGIN", "").strip().rstrip("/")
 
 
 def init():
@@ -74,19 +77,27 @@ def configured():
         return con.execute("SELECT 1 FROM admin_password WHERE id=1").fetchone() is not None
 
 
-def origin_configured():
+def _valid_origin(value):
     try:
-        u = urlsplit(PUBLIC_ORIGIN)
-        return (u.scheme == "https" and bool(u.hostname)
-                and not (u.path or u.query or u.fragment or u.username or u.password))
+        u = urlsplit(value)
+        return (u.scheme == "https" and bool(u.hostname) and
+                not (u.path or u.query or u.fragment or u.username or u.password))
     except ValueError:
         return False
 
 
+def allowed_origins():
+    return {value for value in (PUBLIC_ORIGIN, LAN_ORIGIN) if _valid_origin(value)}
+
+
+def origin_configured():
+    return bool(allowed_origins())
+
+
 def same_origin(request):
-    # Validate the Origin of each password-login attempt and every cookie-backed
-    # mutation, even when served by a reverse proxy with a forwarded Host.
-    return origin_configured() and request.headers.get("origin", "") == PUBLIC_ORIGIN
+    # Explicit HTTPS origin allowlist. Neither X-Forwarded-Host nor untrusted
+    # client supplied Host can widen it. Supports a .local LAN TLS SNI vhost.
+    return request.headers.get("origin", "") in allowed_origins()
 
 
 def password_is_strong(password):
