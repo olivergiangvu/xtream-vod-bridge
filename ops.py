@@ -15,6 +15,7 @@ LABEL_PATTERN = re.compile(r"^[^\x00-\x1f\x7f<>]{1,48}$")
 SCHEMA = {
     "source_label": {"type": "label", "min": 1, "max": 48},
     "series_on_demand": {"type": "bool"},
+    "legacy_source_enabled": {"type": "bool"},
     "series_jit_timeout_seconds": {"type": "int", "min": 2, "max": 15},
     "series_jit_ttl_hours": {"type": "int", "min": 1, "max": 168},
     "series_jit_retry_seconds": {"type": "int", "min": 30, "max": 3600},
