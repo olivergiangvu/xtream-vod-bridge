@@ -3,7 +3,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /srv
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 --home /nonexistent bridge
-COPY app.py ops.py admin_ui.py provider_store.py ./
+COPY app.py ops.py admin_ui.py provider_store.py provider_router.py ./
 COPY admin/ ./admin/
 RUN mkdir -p /data && chown bridge:bridge /data
 USER 10001:10001
