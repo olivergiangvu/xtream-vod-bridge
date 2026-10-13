@@ -96,39 +96,69 @@ def authorize(request: Request, authorization: str = Header(default="")):
 GATE_LOGIN_COOKIE = "xtream_admin_login_nonce"
 
 
-def _gate_page(message: str, nonce: str):
+def _gate_page(message: str, nonce: str, username: str = "owner"):
     message = escape(message)
     nonce = escape(nonce, quote=True)
+    # Never echo a password or an unbounded username into the login page.
+    username = escape(username[:32], quote=True)
     return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en">
+<head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1625">
 <meta name="referrer" content="strict-origin-when-cross-origin">
-<title>HomeDocker Admin — Sign in</title>
+<title>Sign in · Xtream VOD Bridge</title>
 <style>
-:root{{color-scheme:dark}}body{{font:16px system-ui,sans-serif;background:#091522;color:#eaf2fc;
-display:grid;min-height:100vh;place-items:center;margin:0;padding:20px;box-sizing:border-box}}
-main{{max-width:430px;width:100%;padding:28px;border:1px solid #34506b;border-radius:16px;
-background:#102338;box-sizing:border-box}}h1{{font-size:24px;margin:0 0 12px}}
-p{{color:#b9cadc;line-height:1.5}}label{{display:block;margin:16px 0 8px}}
-input{{width:100%;box-sizing:border-box;padding:13px;color:#f7fbff;background:#071626;
-border:1px solid #4a6479;border-radius:8px;font-size:17px}}
-button{{margin-top:20px;width:100%;background:#2776c1;color:white;padding:13px;
-border:0;border-radius:8px;font-weight:650;font-size:16px}}
-.small{{font-size:13px}}.notice{{color:#ffd48c}}
-</style></head><body><main>
-<h1>HomeDocker Admin</h1>
-<p>Sign in with your existing Admin password. No separate nginx Gateway
-password or browser HTTP Basic prompt is needed.</p>
+:root{{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;
+background:radial-gradient(ellipse at 80% -20%,#164d5d 0%,transparent 48%),
+radial-gradient(ellipse at 0% 0%,#173254 0%,transparent 42%),#0a111b;color:#eaf1f8}}
+main{{width:100%;max-width:420px;border:1px solid #314253;border-radius:18px;
+background:#121e2bf5;padding:32px;box-shadow:0 26px 90px #0005}}
+.brand{{display:flex;align-items:center;gap:13px;margin-bottom:30px}}
+.mark{{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;
+background:linear-gradient(135deg,#37cec7,#437add);color:#041a27;font-size:24px;font-weight:800}}
+.product{{font-weight:750;font-size:16px}}.subtitle{{display:block;color:#93a6b9;font-size:12px;margin-top:3px}}
+h1{{font-size:28px;letter-spacing:-.03em;margin:0 0 9px}}
+p{{color:#9dacba;line-height:1.55;margin:0 0 22px;font-size:14px}}
+label{{display:block;font-size:13px;font-weight:650;margin:17px 0 8px}}
+input{{width:100%;border:1px solid #415365;background:#0c1723;color:#f0f7ff;
+border-radius:9px;padding:13px 14px;font:inherit;font-size:16px}}
+input:focus{{outline:2px solid #38afa8;outline-offset:2px}}
+button{{width:100%;border:0;border-radius:9px;margin-top:24px;padding:13px;
+background:linear-gradient(120deg,#138779,#1079aa);color:#fff;font:inherit;
+font-weight:700;font-size:15px;cursor:pointer}}
+button:hover{{filter:brightness(1.12)}}button:focus-visible{{outline:2px solid #8ad6cf;outline-offset:3px}}
+.notice{{color:#ffd49e;margin:0;font-size:13px}}.notice:empty{{display:none}}
+.footnote{{margin:23px 0 0;color:#92a8bb;font-size:12px}}
+@media(max-width:480px){{main{{padding:25px}}}}
+</style>
+</head>
+<body>
+<main>
+<div class="brand"><span class="mark" aria-hidden="true">X</span>
+<div><span class="product">Xtream VOD Bridge</span>
+<span class="subtitle">HomeDocker · Private Console</span></div></div>
+<h1>Welcome back</h1>
+<p>Sign in with your HomeDocker account to manage the VOD bridge.
+No separate nginx Gateway password is needed.</p>
 <p class="notice" role="alert">{message}</p>
 <form method="post" action="/admin-signin/" autocomplete="on">
 <input type="hidden" name="nonce" value="{nonce}">
-<label for="pw">Admin password</label>
-<input id="pw" type="password" name="password" required minlength="14"
-autocomplete="current-password" autofocus>
-<button type="submit">Sign in securely</button>
+<label for="username">Username</label>
+<input id="username" name="username" type="text" value="{username}" required maxlength="32"
+autocomplete="username" autocapitalize="none" spellcheck="false" inputmode="text">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" required minlength="14" maxlength="128"
+autocomplete="current-password">
+<button type="submit">Sign in</button>
 </form>
-<p class="small">HTTPS · HttpOnly session · 12-hour expiry. This form never stores your password.</p>
-</main></body></html>"""
+<p class="footnote">Secure HTTPS · 12-hour session · Works with Safari Passwords and password managers.</p>
+</main>
+</body>
+</html>"""
 
 
 @console.get("/gateway/", response_class=HTMLResponse)
@@ -189,10 +219,12 @@ async def gateway_login_submit(request: Request):
     try:
         fields = parse_qs(body.decode("utf-8"), strict_parsing=True,
                           max_num_fields=3)
-        if set(fields) != {"password", "nonce"} or any(len(v) != 1 for v in fields.values()):
+        if set(fields) not in ({"password", "nonce"}, {"password", "nonce", "username"}) or any(len(v) != 1 for v in fields.values()):
             raise ValueError("Invalid form")
         nonce = fields["nonce"][0]
         password = fields["password"][0]
+        # Backwards-compatible with an already-open, password-only form.
+        username = fields.get("username", ["owner"])[0]
     except (UnicodeError, ValueError):
         raise HTTPException(400, "Invalid login form") from None
     cookie_nonce = request.cookies.get(GATE_LOGIN_COOKIE, "")
@@ -200,14 +232,14 @@ async def gateway_login_submit(request: Request):
             not hmac.compare_digest(nonce, cookie_nonce)):
         raise HTTPException(403, "Login page expired; reload and try again")
     try:
-        session, _csrf = admin_auth.login(password)
+        session, _csrf = admin_auth.login(password, username=username)
     except admin_auth.LoginThrottled:
         raise HTTPException(429, "Too many attempts; try later") from None
     except ValueError:
         # Never return the password, even on failed login. Users can
         # retry using a new anti-CSRF nonce.
         new_nonce = secrets.token_urlsafe(32)
-        response = HTMLResponse(_gate_page("Incorrect password.", new_nonce),
+        response = HTMLResponse(_gate_page("Incorrect username or password.", new_nonce, username),
                                 status_code=401)
         response.set_cookie(GATE_LOGIN_COOKIE, new_nonce,
                             secure=True, httponly=True, samesite="strict",
@@ -261,10 +293,10 @@ def auth_status(request: Request):
 def auth_login(request: Request, response: Response, payload: dict[str, Any]):
     if not admin_auth.same_origin(request):
         raise HTTPException(status_code=403, detail="Secure origin required")
-    if set(payload) != {"password"}:
-        raise HTTPException(status_code=422, detail="Expected password only")
+    if set(payload) not in ({"password"}, {"password", "username"}):
+        raise HTTPException(status_code=422, detail="Expected password and optional username")
     try:
-        session, csrf = admin_auth.login(payload["password"])
+        session, csrf = admin_auth.login(payload["password"], username=payload.get("username", "owner"))
     except admin_auth.LoginThrottled:
         raise HTTPException(status_code=429, detail="Too many attempts; try later") from None
     except ValueError:
