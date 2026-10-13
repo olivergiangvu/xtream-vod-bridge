@@ -105,14 +105,12 @@ class AdminPrefixTests(unittest.TestCase):
     def test_main_and_admin_compose_image_tags_are_identical(self):
         compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
         main = compose.split("  xtream-vod-bridge:", 1)[1].split("  xtream-vod-admin:", 1)[0]
-        admin = compose.split("  xtream-vod-admin:", 1)[1].split("\\nvolumes:", 1)[0]
-        import re
-        main_image = re.search(r"^    image: ([^\\n]+)$", main, re.MULTILINE)
-        admin_image = re.search(r"^    image: ([^\\n]+)$", admin, re.MULTILINE)
-        self.assertIsNotNone(main_image)
-        self.assertIsNotNone(admin_image)
-        self.assertEqual(main_image.group(1), admin_image.group(1))
-        self.assertEqual(main_image.group(1), "homedocker/xtream-vod-bridge:0.4.1")
+        admin = compose.split("  xtream-vod-admin:", 1)[1]
+        def image(block):
+            return next(line.partition(": ")[2] for line in block.splitlines()
+                        if line.startswith("    image: "))
+        self.assertEqual(image(main), image(admin))
+        self.assertEqual(image(admin), "homedocker/xtream-vod-bridge:0.4.1")
 
     def test_prefix_ui_does_not_include_sensitive_tokens(self):
         html = self.client.get("/")
