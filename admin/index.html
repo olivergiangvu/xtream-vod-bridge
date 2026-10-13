@@ -40,6 +40,7 @@
             <div class="preview"><span class="muted small">Stream preview</span><strong id="previewName">IPTV VOD 2160p</strong><span class="small muted">Example only · quality from provider title</span></div>
             <h3>On-demand resolver</h3>
             <label class="toggle-row"><span><strong>Fetch Series on demand</strong><small>First request hydrates episodes; later requests hit SQLite.</small></span><input id="onDemand" type="checkbox"></label>
+            <label class="toggle-row"><span><strong>Show legacy .env provider</strong><small>Keep enabled until the encrypted replacement is indexed and playing. The legacy relay remains available for old signed URLs.</small></span><input id="legacySource" type="checkbox" checked></label>
             <div class="form-grid">
               <div><label for="timeout">Request timeout (s)</label><input id="timeout" type="number" min="2" max="15" step="1"></div>
               <div><label for="ttl">Missing-episode retry (h)</label><input id="ttl" type="number" min="1" max="168" step="1"></div>
@@ -66,6 +67,7 @@
       <section class="panel" style="margin-top:20px" id="providerManager">
         <div class="panel-header"><div><div class="eyebrow">PROVIDER VAULT · PREVIEW</div><h2>Xtream accounts</h2></div><span class="soft-pill" id="providerKey">Checking encryption key</span></div>
         <p class="muted">Add multiple provider profiles using encrypted credential storage. This development preview does not activate any new provider for playback yet; current Meteor/legacy playback is not changed.</p>
+        <div class="buttons"><button type="button" class="ghost" id="providerImport">Import current .env provider</button><span class="small muted">One-time encrypted migration; does not change the legacy service</span></div>
         <div id="providerRows" aria-label="Saved providers" class="provider-list"></div>
         <form id="providerForm" autocomplete="off">
           <h3 id="providerFormTitle">Add a provider</h3>
