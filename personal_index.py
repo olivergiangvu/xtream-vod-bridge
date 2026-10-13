@@ -238,6 +238,14 @@ async def sync_owned(owner, source_id):
             rows, episodes = await _xtream_rows(config)
         timestamp = int(time.time())
         with ops.database() as con:
+            current = con.execute(
+                "SELECT enabled,config_ciphertext FROM vod_sources "
+                "WHERE owner=? AND source_id=?",
+                (owner, source_id),
+            ).fetchone()
+            if (not current or not current["enabled"]
+                    or current["config_ciphertext"] != row["config_ciphertext"]):
+                raise ValueError("Source changed during sync; discard stale results")
             con.executemany(
                 "INSERT INTO tenant_media(source_id,kind,item_key,name,imdb_id,"
                 "tmdb_id,extension,stream_ciphertext,indexed_at) "
