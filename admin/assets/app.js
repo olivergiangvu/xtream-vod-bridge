@@ -9,6 +9,7 @@ const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
 let refreshInFlight = null;
+let privateManifest = ''; // Private addon credential; in-memory only.
 
 async function api(path, method = 'GET', value = undefined) {
   const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
@@ -28,6 +29,8 @@ async function api(path, method = 'GET', value = undefined) {
   // nginx redirects expired /admin/ sessions to the public sign-in gateway.
   // A redirected HTML page is not an API success response.
   if (response.redirected && new URL(response.url).pathname.startsWith('/admin-signin/')) {
+    privateManifest = '';
+    $('manifestUrl').value = '';
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
     }
@@ -125,6 +128,58 @@ async function refresh(setForm = false) {
   }
 }
 
+// The addon token is only fetched by the authenticated Admin API.
+// Mask it by default, never persist to browser storage or print to logs.
+function concealManifest() {
+  privateManifest = '';
+  const input = $('manifestUrl');
+  input.type = 'password';
+  input.value = '';
+  $('manifestReveal').textContent = 'Show';
+  $('manifestReveal').setAttribute('aria-pressed', 'false');
+  $('manifestReveal').disabled = true;
+  $('manifestCopy').disabled = true;
+}
+
+async function prepareManifest() {
+  concealManifest();
+  $('manifestStatus').textContent = 'Loading private manifest…';
+  try {
+    const data = await api('/api/manifest');
+    if (typeof data.url !== 'string' || !data.url.startsWith('https://')) {
+      throw new Error('Manifest URL is unavailable.');
+    }
+    privateManifest = data.url;
+    $('manifestReveal').disabled = false;
+    $('manifestCopy').disabled = false;
+    $('manifestStatus').textContent = 'Ready · URL hidden for privacy.';
+  } catch (error) {
+    $('manifestStatus').textContent = 'Manifest unavailable: ' + error.message;
+  }
+}
+
+$('manifestReveal').addEventListener('click', () => {
+  if (!privateManifest) return;
+  const input = $('manifestUrl');
+  const revealed = input.type === 'password';
+  input.type = revealed ? 'text' : 'password';
+  input.value = revealed ? privateManifest : '';
+  $('manifestReveal').textContent = revealed ? 'Hide' : 'Show';
+  $('manifestReveal').setAttribute('aria-pressed', String(revealed));
+  $('manifestReveal').setAttribute('aria-label',
+    revealed ? 'Hide private manifest URL' : 'Show private manifest URL');
+});
+
+$('manifestCopy').addEventListener('click', async () => {
+  if (!privateManifest) return;
+  try {
+    await navigator.clipboard.writeText(privateManifest);
+    $('manifestStatus').textContent = 'Copied to clipboard · paste into AIOStreams Custom Addon.';
+  } catch (_) {
+    $('manifestStatus').textContent = 'Clipboard blocked. Click Show, select the URL, then copy manually.';
+  }
+});
+
 $('sourceLabel').addEventListener('input', updatePreview);
 async function showDashboard() {
   await refresh(true);
@@ -135,6 +190,7 @@ async function showDashboard() {
   $('refresh').hidden = false;
   $('logout').hidden = false;
   refreshFeedback('');
+  void prepareManifest();
   if (polling) clearInterval(polling);
   polling = setInterval(() => {
     if (refreshInFlight) return;
@@ -267,6 +323,8 @@ $('logout').addEventListener('click', async () => {
     $('secret').value = '';
     $('legacySecret').value = '';
     $('sourceLabel').value = '';
+    concealManifest();
+    $('manifestStatus').textContent = '';
     refreshFeedback('');
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
