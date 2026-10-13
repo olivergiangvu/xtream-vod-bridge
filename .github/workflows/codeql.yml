@@ -2,9 +2,9 @@ name: CodeQL security scan
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix']
   pull_request:
-    branches: [main]
+    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix']
   schedule:
     - cron: '43 3 * * 2'
   workflow_dispatch:
