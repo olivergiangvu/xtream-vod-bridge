@@ -35,8 +35,9 @@ class RegistryUnavailable(RuntimeError):
 def _cipher():
     try:
         key = KEY_FILE.read_bytes().strip()
-        if not KEY_FILE.is_file() or len(key) != 44:
-            raise ValueError("Invalid key file")
+        if (not KEY_FILE.is_file() or len(key) != 44 or
+                (KEY_FILE.stat().st_mode & 0o077)):
+            raise ValueError("Invalid or insecure key file")
         return Fernet(key)
     except (OSError, ValueError) as exc:
         raise RegistryUnavailable("Provider key is not configured") from None
@@ -183,7 +184,7 @@ def _present(row, data):
         "password_configured": bool(data.get("password")),
         "enabled": bool(row["enabled"]),
         "priority": row["priority"],
-        "status": "staged_not_active",  # don't falsely advertise streaming readiness
+        "status": "active" if row["enabled"] else "staged_not_active",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -279,3 +280,46 @@ def delete_profile(uid):
         con.execute("DELETE FROM provider_items WHERE provider_id=?", (uid,))
         con.execute("DELETE FROM provider_episodes WHERE provider_id=?", (uid,))
     ops.event("config_updated", "admin", "ok")
+
+
+
+def active_profiles():
+    """For streaming internals only. Never expose decrypted records to the UI."""
+    cipher = _cipher()
+    with ops.database() as con:
+        rows = con.execute("SELECT * FROM provider_profiles WHERE enabled=1 "
+                           "ORDER BY priority ASC, created_at ASC").fetchall()
+    return [(dict(row), _decode(row, cipher)) for row in rows]
+
+
+def active_profile(uid):
+    cipher = _cipher()
+    with ops.database() as con:
+        row = con.execute(
+            "SELECT * FROM provider_profiles WHERE provider_id=? AND enabled=1", (uid,)
+        ).fetchone()
+    if not row:
+        raise KeyError("Provider is disabled or missing")
+    return dict(row), _decode(row, cipher)
+
+
+def set_active(uid, enabled):
+    if not isinstance(enabled, bool):
+        raise ValueError("Enabled must be boolean")
+    _cipher()
+    with ops.database() as con:
+        row = con.execute("SELECT provider_id FROM provider_profiles WHERE provider_id=?",
+                          (uid,)).fetchone()
+        if not row:
+            raise KeyError("Provider not found")
+        if enabled:
+            count = con.execute(
+                "SELECT COUNT(*) FROM provider_items WHERE provider_id=?", (uid,)
+            ).fetchone()[0]
+            if not count:
+                raise ValueError("Provider must be indexed and validated before activation")
+        con.execute(
+            "UPDATE provider_profiles SET enabled=?, updated_at=? WHERE provider_id=?",
+            (int(enabled), int(time.time()), uid)
+        )
+    return {"id": uid, "enabled": enabled}
