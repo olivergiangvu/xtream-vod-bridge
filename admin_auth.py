@@ -26,9 +26,24 @@ MAX_ATTEMPTS = 5
 WINDOW_SECONDS = 10 * 60
 LOCK_SECONDS = 15 * 60
 
-# Must be configured to exact public HTTPS origin, INCLUDING nonstandard port.
-# Empty defaults to browser-password-login disabled; bearer API continues to work.
-PUBLIC_ORIGIN = os.getenv("ADMIN_PUBLIC_ORIGIN", "").rstrip("/")
+# Prefer explicitly configured admin HTTPS origin. For the existing
+# HomeDocker same-port deployment, derive it from PUBLIC_BASE_URL, dropping
+# any addon path prefix; avoids another .env edit for routine Admin setup.
+# Empty/HTTP origin fails closed: browser-password-login stays disabled.
+def _public_origin():
+    explicit = os.getenv("ADMIN_PUBLIC_ORIGIN", "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    try:
+        url = urlsplit(os.getenv("PUBLIC_BASE_URL", ""))
+        if url.scheme == "https" and url.hostname and not url.username and not url.password:
+            return url.scheme + "://" + url.netloc
+    except ValueError:
+        pass
+    return ""
+
+
+PUBLIC_ORIGIN = _public_origin()
 
 
 def init():
