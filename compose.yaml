@@ -23,7 +23,7 @@ services:
       retries: 3
       start_period: 15s
   xtream-vod-admin:
-    image: homedocker/xtream-vod-bridge:0.4.0
+    image: homedocker/xtream-vod-bridge:0.4.1
     container_name: xtream-vod-admin
     restart: unless-stopped
     depends_on:
