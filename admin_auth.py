@@ -140,7 +140,9 @@ class LoginThrottled(Exception):
     pass
 
 
-def login(password):
+def login(password, username="owner"):
+    # Existing single Owner account. Keep the username check inside the
+    # password-verification flow so invalid usernames share rate limiting.
     if not origin_configured():
         raise RuntimeError("HTTPS public origin not configured")
     if not isinstance(password, str) or len(password) > 256:
@@ -159,7 +161,8 @@ def login(password):
         ).fetchone()
         if account is None:
             raise RuntimeError("Admin password not provisioned")
-        good = _verify(password, account)
+        valid_username = isinstance(username, str) and hmac.compare_digest(username, "owner")
+        good = _verify(password, account) and valid_username
         if not good:
             attempts = 1
             if status and now - status["window_start"] <= WINDOW_SECONDS:
