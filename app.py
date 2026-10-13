@@ -16,11 +16,14 @@ from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 import httpx
 import ops
+import provider_store
+import provider_router
+from types import SimpleNamespace
 from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.4.0"
+VERSION = "0.5.0-dev"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -172,6 +175,8 @@ def init_db():
                 conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column} ON items(kind, {column})")
     ops.init()
+    if provider_router.ENABLED:
+        provider_store.init()
 
 
 def clean_id(value):
@@ -766,13 +771,15 @@ async def lifespan(_app):
     task = asyncio.create_task(loop())
     bootstrap = (asyncio.create_task(series_bootstrap_loop())
                  if not MOVIES_ONLY and SERIES_BOOTSTRAP_BATCH > 0 else None)
+    providers_task = (asyncio.create_task(provider_router.periodic_sync(
+        SimpleNamespace(**globals()))) if provider_router.ENABLED else None)
     try:
         yield
     finally:
-        for running in (task, bootstrap):
+        for running in (task, bootstrap, providers_task):
             if running:
                 running.cancel()
-        for running in (task, bootstrap):
+        for running in (task, bootstrap, providers_task):
             if running:
                 try:
                     await running
@@ -805,6 +812,7 @@ async def health():
             "index": stats, "episodes": episode_count,
             "series_on_demand": ops.get("series_on_demand", SERIES_ON_DEMAND) and not MOVIES_ONLY,
             "jit": dict(JIT_STATS),
+            "multi_provider": provider_router.health(),
             "series_progress": {"details_checked": series_checked,
                                 "with_episodes": series_with_episodes,
                                 "pending_enrichment": series_pending,
@@ -815,6 +823,25 @@ async def health():
                                 "last_batch_error": LAST_RUN["series_bootstrap_last_error"],
                                 "series_enriched_last_sync": LAST_RUN["series_enriched_last_sync"],
                                 "movie_enriched_last_sync": LAST_RUN["movie_enriched_last_sync"]}}
+
+
+@app.post("/admin/providers/sync")
+async def sync_provider_now(x_admin_token: str = Header(default=""), provider_id: str = ""):
+    if not ADMIN_TOKEN or not hmac.compare_digest(x_admin_token, ADMIN_TOKEN):
+        raise HTTPException(403)
+    if not provider_router.ENABLED:
+        raise HTTPException(409, "Provider router not enabled")
+    try:
+        if provider_id:
+            count = await provider_router.sync_profile(
+                provider_id, SimpleNamespace(**globals()))
+            return {"status": "ok", "indexed": count}
+        return await provider_router.sync_all(SimpleNamespace(**globals()))
+    except (provider_store.RegistryUnavailable, KeyError):
+        raise HTTPException(503, "Provider unavailable") from None
+    except Exception as exc:
+        LOG.warning("Provider manual sync failed error=%s", type(exc).__name__)
+        raise HTTPException(502, "Provider synchronization failed") from None
 
 
 @app.post("/admin/refresh")
@@ -931,6 +958,14 @@ async def streams(token: str, media_type: str, media_id: str):
         if len(result) >= 20:
             break
     selected_streams = result[:20]
+    if provider_router.ENABLED:
+        try:
+            extras = await provider_router.resolve_streams(
+                media_type, media_id, SimpleNamespace(**globals()))
+            selected_streams = (selected_streams + extras)[:40]
+        except Exception as exc:
+            # One provider/router failure must not block working legacy video.
+            LOG.warning("Multi-provider lookup failed type=%s", type(exc).__name__)
     ops.event("stream_request", media_type, "ok" if selected_streams else "empty",
               duration_ms=(time.monotonic() - started) * 1000,
               amount=len(selected_streams))
@@ -975,10 +1010,10 @@ def make_stream_client():
                              limits=httpx.Limits(max_connections=10, max_keepalive_connections=4))
 
 
-def safe_redirect(target):
+def safe_redirect(target, source_base=None):
     try:
         parsed = urlsplit(target)
-        source = urlsplit(BASE)
+        source = urlsplit(source_base or BASE)
         if parsed.username or parsed.password or not parsed.hostname or parsed.scheme not in ("http", "https"):
             return False
         host = parsed.hostname.lower()
@@ -1011,6 +1046,22 @@ def safe_redirect(target):
         return False
 
 
+@app.api_route(
+    "/play/provider/{provider_id}/{kind}/{sid}/{media_id}/{exp}/{sig}/{filename}",
+    methods=["GET", "HEAD"])
+async def play_provider(provider_id: str, kind: str, sid: int, media_id: str,
+                        exp: str, sig: str, filename: str, request: Request):
+    if not provider_router.ENABLED:
+        raise HTTPException(404)
+    if not provider_router.valid_signature(provider_id, kind, sid, media_id,
+                                           exp, sig, filename,
+                                           SimpleNamespace(**globals())):
+        raise HTTPException(403)
+    ext = filename.rsplit(".", 1)[-1].lower()
+    return await relay_stream(kind, sid, ext, request, filename=filename,
+                              provider_id=provider_id)
+
+
 @app.api_route("/play/{kind}/{sid}.{ext}", methods=["GET", "HEAD"])
 async def play(kind: str, sid: int, ext: str, request: Request, exp: str = "", sig: str = ""):
     # Compatibility: old query-signed URLs remain valid until their expiry.
@@ -1028,17 +1079,29 @@ async def play_named(kind: str, sid: int, media_id: str, exp: str, sig: str,
     return await relay_stream(kind, sid, ext, request, filename=filename)
 
 
-async def relay_stream(kind, sid, ext, request, filename=None):
-    with db() as con:
-        if kind == "movie":
-            exists = con.execute("SELECT 1 FROM items WHERE kind='movie' AND item_id=? AND extension=?",
-                                 (sid, ext)).fetchone()
-        else:
-            exists = con.execute("SELECT 1 FROM episodes WHERE stream_id=? AND extension=?", (sid, ext)).fetchone()
-    if not exists:
-        raise HTTPException(404)
-    # Relay stream bytes: credentials are never included in Stremio or AIOStreams URLs.
-    url = f"{BASE}/{'movie' if kind == 'movie' else 'series'}/{quote(USER, safe='')}/{quote(PASSWORD, safe='')}/{sid}.{ext}"
+async def relay_stream(kind, sid, ext, request, filename=None, provider_id=None):
+    if provider_id:
+        if not provider_router.existing_stream(provider_id, kind, sid, ext):
+            raise HTTPException(404)
+        try:
+            _, config = provider_store.active_profile(provider_id)
+        except (KeyError, provider_store.RegistryUnavailable):
+            raise HTTPException(404) from None
+        upstream_base = config["base_url"]
+        upstream_user = config["username"]
+        upstream_password = config["password"]
+    else:
+        with db() as con:
+            if kind == "movie":
+                exists = con.execute("SELECT 1 FROM items WHERE kind='movie' AND item_id=? AND extension=?",
+                                     (sid, ext)).fetchone()
+            else:
+                exists = con.execute("SELECT 1 FROM episodes WHERE stream_id=? AND extension=?", (sid, ext)).fetchone()
+        if not exists:
+            raise HTTPException(404)
+        upstream_base, upstream_user, upstream_password = BASE, USER, PASSWORD
+    # Credentials never leave the server in a Stremio/AIOStreams playback URL.
+    url = f"{upstream_base}/{'movie' if kind == 'movie' else 'series'}/{quote(upstream_user, safe='')}/{quote(upstream_password, safe='')}/{sid}.{ext}"
     headers = {}
     if request.headers.get("range"):
         headers["Range"] = request.headers["range"]
@@ -1055,7 +1118,7 @@ async def relay_stream(kind, sid, ext, request, filename=None):
             location = upstream.headers.get("location", "")
             await upstream.aclose()
             target = urljoin(url, location)
-            if not safe_redirect(target):
+            if not safe_redirect(target, source_base=upstream_base):
                 await client.aclose()
                 raise HTTPException(502, "Provider redirect not allowed")
             if redirect_count == 3:
