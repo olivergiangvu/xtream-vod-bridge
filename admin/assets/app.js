@@ -52,6 +52,7 @@ function draw(data, setForm = false) {
     const s = data.settings || {};
     $('sourceLabel').value = s.source_label || 'IPTV VOD';
     $('onDemand').checked = s.series_on_demand === true;
+    $('legacySource').checked = s.legacy_source_enabled !== false;
     $('timeout').value = s.series_jit_timeout_seconds ?? 8;
     $('ttl').value = s.series_jit_ttl_hours ?? 6;
     $('cooldown').value = s.series_jit_retry_seconds ?? 120;
@@ -111,6 +112,7 @@ $('settingsForm').addEventListener('submit', async (event) => {
   const fields = {
     source_label: $('sourceLabel').value.trim(),
     series_on_demand: $('onDemand').checked,
+    legacy_source_enabled: $('legacySource').checked,
     series_jit_timeout_seconds: asInt('timeout'),
     series_jit_ttl_hours: asInt('ttl'),
     series_jit_retry_seconds: asInt('cooldown'),
@@ -259,6 +261,7 @@ async function loadProviders() {
   const unlocked = data.key_configured === true;
   $('providerKey').textContent = unlocked ? 'Encrypted key ready' : 'Encryption key not provisioned';
   $('providerSave').disabled = !unlocked;
+  $('providerImport').disabled = !unlocked || data.streaming_activation !== true;
   if (!unlocked) {
     $('providerSaveStatus').textContent = 'Provider vault is read-only until the server key file is securely mounted.';
   }
@@ -298,4 +301,21 @@ $('showProviderPassword').addEventListener('click', () => {
   const field = $('providerPassword');
   field.type = field.type === 'password' ? 'text' : 'password';
   $('showProviderPassword').textContent = field.type === 'password' ? 'Show' : 'Hide';
+});
+
+
+
+$('providerImport').addEventListener('click', async () => {
+  if (!window.confirm('Import the existing .env Xtream provider into the encrypted vault? This does not change current playback.')) return;
+  $('providerImport').disabled = true;
+  try {
+    const result = await api('/api/providers/import-legacy', 'POST');
+    $('providerSaveStatus').textContent = result.status === 'already_imported'
+      ? 'Legacy provider was already imported.' : 'Primary provider imported as staged. Sync catalog, then activate.';
+    await loadProviders();
+  } catch (e) {
+    $('providerSaveStatus').textContent = e.message;
+  } finally {
+    if (providerStreamingActivation) $('providerImport').disabled = false;
+  }
 });
