@@ -44,6 +44,22 @@
         <article class="metric"><div class="muted">Episodes</div><strong id="episodes">—</strong><span class="small muted">Hydrated into SQLite</span></article>
         <article class="metric"><div class="muted">JIT cache hits</div><strong id="hits">—</strong><span class="small muted">Since process start</span></article>
       </section>
+      <section class="panel manifest-panel" aria-label="Private AIOStreams addon connection">
+        <div class="panel-header">
+          <div><div class="eyebrow">ADDON CONNECTION</div><h2>AIOStreams Manifest</h2></div>
+          <span class="soft-pill">Private URL</span>
+        </div>
+        <p class="muted">Use this URL in AIOStreams → Addons → Custom Addon. It contains your private addon key; never share screenshots of the full link.</p>
+        <div class="manifest-controls">
+          <div class="manifest-url-wrap">
+            <label for="manifestUrl" class="small">Manifest URL</label>
+            <input id="manifestUrl" type="password" placeholder="Hidden · Admin only" autocomplete="off" spellcheck="false" readonly aria-describedby="manifestStatus">
+          </div>
+          <button id="manifestReveal" class="ghost" type="button" disabled aria-label="Show private manifest URL" aria-pressed="false">Show</button>
+          <button id="manifestCopy" class="primary" type="button" disabled>Copy manifest</button>
+        </div>
+        <p id="manifestStatus" class="small muted" role="status" aria-live="polite" aria-atomic="true">Loading private manifest…</p>
+      </section>
       <div class="columns">
         <section class="panel">
           <div class="panel-header"><div><div class="eyebrow">STREAM IDENTITY</div><h2>Source branding</h2></div><span class="soft-pill">Live setting</span></div>
