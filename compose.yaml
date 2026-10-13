@@ -1,7 +1,7 @@
 services:
   xtream-vod-bridge:
     build: .
-    image: homedocker/xtream-vod-bridge:0.3.0
+    image: homedocker/xtream-vod-bridge:0.4.0
     container_name: xtream-vod-bridge
     restart: unless-stopped
     env_file: .env
@@ -22,5 +22,32 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+  xtream-vod-admin:
+    image: homedocker/xtream-vod-bridge:0.4.0
+    container_name: xtream-vod-admin
+    restart: unless-stopped
+    depends_on:
+      xtream-vod-bridge:
+        condition: service_healthy
+    env_file: .env
+    command: ["uvicorn", "admin_ui:console", "--host", "0.0.0.0", "--port", "8768", "--no-access-log"]
+    ports:
+      - "127.0.0.1:${BRIDGE_ADMIN_HOST_PORT:-18768}:8768"
+    volumes:
+      - xtream_vod_index:/data
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8768/',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   xtream_vod_index:
