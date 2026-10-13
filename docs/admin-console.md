@@ -1,5 +1,11 @@
 # HomeDocker Admin Console — v0.4 pilot
 
+**Same-port 18450 option:** [docs/admin-shared-18450.md](admin-shared-18450.md)
+documents prefix-aware admin access using the public HTTPS listener with a
+LAN ACL and independent Bearer API authentication. The existing SSH tunnel
+is still a safe fallback; do not assume IP ACL alone protects against
+WAN→LAN source NAT.
+
 This Web UI is an **optional second Docker service**, not a route of the public
 Stremio addon. It is never exposed by the nginx TLS server on 18450.
 
