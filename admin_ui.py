@@ -351,6 +351,30 @@ def settings(payload: dict[str, Any]):
     return {"settings": updated}
 
 
+@console.get("/api/manifest", dependencies=[Depends(authorize)])
+def private_manifest_url():
+    """Return the configured addon manifest URL only to authenticated Admins.
+
+    The URL contains ADDON_TOKEN, an addon credential. Never put it into HTML,
+    server logs, analytics, or an unauthenticated endpoint.
+    """
+    from urllib.parse import quote, urlsplit
+
+    try:
+        public = urlsplit(bridge.PUBLIC)
+    except ValueError:
+        public = None
+    if (not public or public.scheme != "https" or not public.hostname
+            or public.username or public.password or public.query or public.fragment
+            or not bridge.ADDON_TOKEN):
+        raise HTTPException(503, "Private manifest is not configured")
+    return {
+        "url": bridge.PUBLIC.rstrip("/") + "/a/"
+               + quote(bridge.ADDON_TOKEN, safe="") + "/manifest.json",
+        "types": ["movie"] if bridge.MOVIES_ONLY else ["movie", "series"],
+    }
+
+
 @console.get("/api/events", dependencies=[Depends(authorize)])
 def events():
     return {"events": ops.events(limit=100)}
