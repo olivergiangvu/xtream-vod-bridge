@@ -1,4 +1,4 @@
-# Xtream VOD Bridge v0.3.0 — HomeDocker
+# Xtream VOD Bridge v0.4.0 — HomeDocker
 
 **Status:** pre-production prototype. The initial GitHub commit is not an official release and has not passed end-to-end tests with a live provider, AIOStreams, or Remux/Trellis.
 
@@ -25,6 +25,28 @@ TMDb API (optional but strongly recommended for IMDb↔TMDb mapping)────
 ### What Xtream metadata must contain
 
 The playlist listing endpoints usually contain the title and numeric `stream_id`, but often **no IMDb/TMDb ID**. The bridge therefore requests details gradually and caches mappings in SQLite. `get_vod_info` / `get_series_info` need to contain `imdb_id` or `tmdb_id` for deterministic matching. TMDb API key enables translation in either direction. Title-only fuzzy matching is deliberately **not** enabled in this release because it can play the wrong film or wrong episode.
+
+## v0.4.0 candidate: private admin console, Strand-style source label, diagnostics
+
+**This is a release candidate, not the v0.3.0 stable baseline.** The tested
+HomeDocker functional baseline is pinned at
+[`stable/v0.3.0`](https://github.com/olivergiangvu/xtream-vod-bridge/tree/stable/v0.3.0)
+(commit `2b297cce`). Do not deploy v0.4 until CI/CodeQL pass.
+
+This release adds a **separate admin web service** at host loopback
+`127.0.0.1:18768`, accessible via an SSH tunnel, never via public nginx.
+It uses the existing `ADMIN_TOKEN` as bearer auth without browser storage.
+It can rename the IPTV source (like Strand's provider name, e.g. `Meteor`),
+and edit a strictly validated allowlist of **non-secret** JIT controls via
+the existing SQLite volume, applied live on new stream requests. New events
+record only status, request category, duration and stream count; no provider
+URL, token, IP or media ID. Credentials and CDN security remain in protected
+`.env`.
+
+Read [admin deployment and SSH tunnel guide](docs/admin-console.md) and the
+[hard-code audit](docs/hardcode-audit-v0.4.md). The actual baseline must be
+verified again with three Movie, three Series Range 206 requests and a UI
+rename test before promoting v0.4.
 
 ## v0.3.0: demand-first Series resolver (opt-in)
 
