@@ -119,6 +119,15 @@ class PasswordLoginTests(unittest.TestCase):
         with patch.object(admin_auth, "PUBLIC_ORIGIN", ""):
             self.assertEqual(self.login().status_code, 403)
 
+    def test_approved_local_hostname_is_not_a_wildcard_or_relay_ip_allowlist(self):
+        local_origin = "https://homedocker.local:18450"
+        with patch.object(admin_auth, "LAN_ORIGIN", local_origin):
+            self.assertIn(local_origin, admin_auth.allowed_origins())
+            self.assertEqual(self.login(origin=local_origin).status_code, 200)
+            self.assertEqual(self.login(origin="https://different.local:18450").status_code, 403)
+            self.assertEqual(self.login(origin="https://homedocker.local.evil.org:18450").status_code, 403)
+            self.assertEqual(self.login(origin="http://homedocker.local:18450").status_code, 403)
+
     def test_bad_password_attempts_are_rate_limited_and_no_secret_stored(self):
         for _ in range(5):
             self.assertEqual(self.login(password="incorrect-long-password").status_code, 401)
