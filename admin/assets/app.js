@@ -1,12 +1,16 @@
 'use strict';
 let adminToken = '';
+// Relative to this document: /admin/ -> /admin/api/; direct / -> /api/.
+// Do not route admin API requests to the public addon /api/ root on 18450.
+const adminApiRoot = new URL('api/', document.baseURI);
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
 
 async function api(path, method = 'GET', value = undefined) {
-  const response = await fetch(path, {
+  const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
+  const response = await fetch(new URL(suffix, adminApiRoot), {
     method,
     cache: 'no-store',
     headers: {
