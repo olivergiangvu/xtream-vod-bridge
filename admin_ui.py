@@ -176,7 +176,7 @@ def settings(payload: dict[str, Any]):
     return {"settings": updated}
 
 
-@console.get("/api/manifest", dependencies=[Depends(authorize)])
+@console.get("/api/manifest", dependencies=[Depends(require_writer)])
 def private_manifest_url():
     # The ADDON_TOKEN is a credential. This endpoint is strictly authenticated
     # and must not be logged, cached, embedded in HTML or sent to analytics.
