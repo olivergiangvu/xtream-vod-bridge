@@ -25,6 +25,7 @@ SCHEMA = {
 DEFAULTS = {
     "source_label": os.getenv("STREAM_SOURCE_LABEL", "IPTV VOD"),
     "series_on_demand": os.getenv("SERIES_ON_DEMAND", "0") == "1",
+    "legacy_source_enabled": True,
     "series_jit_timeout_seconds": int(float(os.getenv("SERIES_JIT_TIMEOUT_SECONDS", "8"))),
     "series_jit_ttl_hours": int(os.getenv("SERIES_JIT_TTL_HOURS", "6")),
     "series_jit_retry_seconds": int(os.getenv("SERIES_JIT_RETRY_SECONDS", "120")),
