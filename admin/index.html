@@ -96,6 +96,12 @@
         <div class="panel-header"><div><div class="eyebrow">ACCESS MANAGEMENT</div><h2>Admin Users</h2></div><span class="soft-pill">Owner only</span></div>
         <p class="muted">Each person has their own username and password. Admin can change bridge settings; Viewer can see metrics and diagnostics. These accounts are separate from Xtream provider credentials.</p>
         <div id="adminUsersList" class="admin-user-list"></div>
+        <form id="resetAdminPasswordForm" autocomplete="off" hidden>
+          <h3 id="resetAdminPasswordTitle">Reset password</h3>
+          <label for="resetAdminPassword">New password</label>
+          <input id="resetAdminPassword" type="password" minlength="14" maxlength="128" autocomplete="new-password" required>
+          <div class="buttons"><button type="submit" class="primary">Save new password</button><button type="button" class="ghost" id="cancelAdminReset">Cancel</button></div>
+        </form>
         <form id="createAdminForm" autocomplete="off">
           <div class="form-grid">
             <div><label for="newAdminUsername">New username</label><input id="newAdminUsername" required autocomplete="off" maxlength="32" pattern="[a-z][a-z0-9_-]{2,31}" placeholder="e.g. admin2"></div>
