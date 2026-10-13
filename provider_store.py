@@ -59,6 +59,7 @@ def init():
                 label TEXT NOT NULL,
                 config_blob BLOB NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 0,
+                credential_revision INTEGER NOT NULL DEFAULT 0,
                 priority INTEGER NOT NULL DEFAULT 100,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -249,6 +250,9 @@ def update_profile(uid, value):
     if not row:
         raise KeyError("Provider not found")
     previous = _decode(row, cipher)
+    credential_change = bool({"base_url", "username", "password"} & set(value))
+    if row["enabled"] and credential_change:
+        raise ValueError("Disable provider before changing URL or credentials")
     replacement = dict(previous)
     for k in ("base_url", "username", "password"):
         if k in value:
@@ -261,8 +265,16 @@ def update_profile(uid, value):
     priority = _validate_priority(value["priority"]) if "priority" in value else row["priority"]
     blob = cipher.encrypt(json.dumps(replacement, separators=(",", ":")).encode())
     with ops.database() as con:
-        con.execute("UPDATE provider_profiles SET label=?, config_blob=?, priority=?, updated_at=? "
-                    "WHERE provider_id=?", (label, blob, priority, int(time.time()), uid))
+        con.execute(
+            "UPDATE provider_profiles SET label=?, config_blob=?, priority=?, "
+            "credential_revision=credential_revision+?, updated_at=? WHERE provider_id=?",
+            (label, blob, priority, int(credential_change), int(time.time()), uid),
+        )
+        if credential_change:
+            # Numeric stream IDs are only meaningful inside the old account.
+            # Reset scope and require re-index before reactivation.
+            con.execute("DELETE FROM provider_episodes WHERE provider_id=?", (uid,))
+            con.execute("DELETE FROM provider_items WHERE provider_id=?", (uid,))
     ops.event("config_updated", "admin", "ok")
     return {"id": uid, "label": label, "status": "staged_not_active"}
 
@@ -270,10 +282,12 @@ def update_profile(uid, value):
 def delete_profile(uid):
     _cipher()
     with ops.database() as con:
-        found = con.execute("SELECT 1 FROM provider_profiles WHERE provider_id=?",
+        found = con.execute("SELECT enabled FROM provider_profiles WHERE provider_id=?",
                             (uid,)).fetchone()
         if not found:
             raise KeyError("Provider not found")
+        if found["enabled"]:
+            raise ValueError("Disable provider before deletion")
         con.execute("DELETE FROM provider_profiles WHERE provider_id=?", (uid,))
         # Future implementation must consider active provider stream links.
         # Staged profiles have never generated public links, so can be removed.
@@ -323,3 +337,15 @@ def set_active(uid, enabled):
             (int(enabled), int(time.time()), uid)
         )
     return {"id": uid, "enabled": enabled}
+
+
+
+def credential_revision(uid):
+    with ops.database() as con:
+        row = con.execute(
+            "SELECT credential_revision FROM provider_profiles "
+            "WHERE provider_id=? AND enabled=1", (uid,)
+        ).fetchone()
+    if row is None:
+        raise KeyError("Provider inactive or missing")
+    return int(row[0])
