@@ -47,12 +47,20 @@ class PromotionTests(unittest.TestCase):
             )
             reverse_ui = [
                 (
+                    '        fields = parse_qs(body.decode("utf-8"), strict_parsing=True,\n'
+                    '                          keep_blank_values=True, max_num_fields=3)',
+                    '        fields = parse_qs(body.decode("utf-8"), strict_parsing=True,\n'
+                    '                          max_num_fields=3)',
+                ),
+                (
                     'if set(fields) not in ({"password", "nonce"}, {"password", "nonce", "username"}) or any(len(v) != 1 for v in fields.values()):',
                     'if set(fields) != {"password", "nonce"} or any(len(v) != 1 for v in fields.values()):',
                 ),
                 (
                     '        # Backwards-compatible with an already-open, password-only form.\n'
-                    '        username = fields.get("username", ["owner"])[0]\n',
+                    '        username = fields.get("username", ["owner"])[0]\n'
+                    '        if not nonce or not password:\n'
+                    '            raise ValueError("Invalid form")\n',
                     '',
                 ),
                 ('admin_auth.login(password, username=username)',
