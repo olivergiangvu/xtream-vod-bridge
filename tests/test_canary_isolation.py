@@ -17,6 +17,7 @@ class CanaryIsolation(unittest.TestCase):
              patch.object(bridge, "DATA_DIR", Path(dirname)), \
              patch.object(ops, "PATH", Path(dirname) / "index.sqlite"), \
              patch.object(bridge, "LEGACY_SYNC_ENABLED", False), \
+             patch.object(bridge, "check_settings", return_value=None), \
              patch.object(bridge, "loop", new=AsyncMock()) as loop, \
              patch.object(bridge, "series_bootstrap_loop", new=AsyncMock()) as bootstrap:
             with TestClient(bridge.app) as client:
