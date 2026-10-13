@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 import app as bridge
 import ops
 import admin_auth
+import admin_users
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -33,6 +34,7 @@ BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
 async def lifespan(_app):
     ops.init()
     admin_auth.init()
+    admin_users.init()
     yield
 
 
@@ -74,7 +76,7 @@ def authorize(request: Request, authorization: str = Header(default="")):
     # uses a separate password-verified HttpOnly session.
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if bridge.ADMIN_TOKEN and hmac.compare_digest(token, bridge.ADMIN_TOKEN):
-        return
+        return {"username": "owner", "role": "owner"}
     session = admin_auth.session_info(request.cookies.get(admin_auth.COOKIE))
     if session:
         if request.method in ("PUT", "POST", "PATCH", "DELETE"):
@@ -83,7 +85,7 @@ def authorize(request: Request, authorization: str = Header(default="")):
                 csrf, session["csrf"]
             ):
                 raise HTTPException(status_code=403, detail="CSRF validation failed")
-        return
+        return {"username": session["username"], "role": session["role"]}
     raise HTTPException(status_code=401, detail="Unauthorized",
                         headers={"WWW-Authenticate": "Bearer"})
 
@@ -93,6 +95,18 @@ def authorize(request: Request, authorization: str = Header(default="")):
 # the nginx auth_request gate AND the FastAPI Admin session. Gateway pages
 # MUST be exposed only at /admin-signin/ through the reviewed nginx route.
 # /api/auth/gate-check MUST remain nginx-internal, NEVER directly public.
+def require_writer(principal=Depends(authorize)):
+    if principal["role"] not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Read-only account")
+    return principal
+
+
+def require_owner(principal=Depends(authorize)):
+    if principal["role"] != "owner":
+        raise HTTPException(status_code=403, detail="Owner access required")
+    return principal
+
+
 GATE_LOGIN_COOKIE = "xtream_admin_login_nonce"
 
 
@@ -288,6 +302,8 @@ def auth_status(request: Request):
         "authenticated": bool(session),
         "csrf_token": session["csrf"] if session else None,
         "password_ready": admin_auth.configured() and admin_auth.origin_configured(),
+        "username": session["username"] if session else None,
+        "role": session["role"] if session else None,
     }
 
 
@@ -312,7 +328,8 @@ def auth_login(request: Request, response: Response, payload: dict[str, Any]):
         path=admin_auth.COOKIE_PATH,
         max_age=admin_auth.SESSION_SECONDS,
     )
-    return {"authenticated": True, "csrf_token": csrf, "expires_in": admin_auth.SESSION_SECONDS}
+    return {"authenticated": True, "csrf_token": csrf, "expires_in": admin_auth.SESSION_SECONDS,
+            "username": payload.get("username", "owner")}
 
 
 @console.post("/api/auth/logout", dependencies=[Depends(authorize)])
@@ -342,7 +359,7 @@ def overview():
     }
 
 
-@console.put("/api/settings", dependencies=[Depends(authorize)])
+@console.put("/api/settings", dependencies=[Depends(require_writer)])
 def settings(payload: dict[str, Any]):
     try:
         updated = ops.update(payload)
@@ -351,7 +368,7 @@ def settings(payload: dict[str, Any]):
     return {"settings": updated}
 
 
-@console.get("/api/manifest", dependencies=[Depends(authorize)])
+@console.get("/api/manifest", dependencies=[Depends(require_writer)])
 def private_manifest_url():
     """Return the configured addon manifest URL only to authenticated Admins.
 
@@ -373,6 +390,44 @@ def private_manifest_url():
                + quote(bridge.ADDON_TOKEN, safe="") + "/manifest.json",
         "types": ["movie"] if bridge.MOVIES_ONLY else ["movie", "series"],
     }
+
+
+@console.get("/api/admin-users", dependencies=[Depends(require_owner)])
+def list_admin_accounts():
+    return {"users": admin_users.list_users()}
+
+
+@console.post("/api/admin-users", dependencies=[Depends(require_owner)], status_code=201)
+def create_admin_account(payload: dict[str, Any]):
+    if set(payload) != {"username", "password", "role"}:
+        raise HTTPException(status_code=422, detail="Expected username, password and role")
+    try:
+        return admin_users.add_user(payload["username"], payload["password"], payload["role"])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid account fields") from None
+
+
+@console.patch("/api/admin-users/{username}", dependencies=[Depends(require_owner)])
+def edit_admin_account(username: str, payload: dict[str, Any]):
+    if not payload or set(payload) - {"role", "enabled", "password"}:
+        raise HTTPException(status_code=422, detail="Invalid account changes")
+    try:
+        return admin_users.modify_user(username, **payload)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Account not found") from None
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Invalid account change") from None
+
+
+@console.delete("/api/admin-users/{username}", dependencies=[Depends(require_owner)])
+def remove_admin_account(username: str):
+    try:
+        admin_users.delete_user(username)
+        return {"status": "deleted"}
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Account not found") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Owner cannot be deleted") from None
 
 
 @console.get("/api/events", dependencies=[Depends(authorize)])
