@@ -61,7 +61,8 @@ def validate(key, value):
         raise ValueError("Unsupported setting")
     rule = SCHEMA[key]
     if rule["type"] == "label":
-        if not isinstance(value, str) or not LABEL_PATTERN.fullmatch(value.strip()):
+        if (not isinstance(value, str) or "\\\\" in value or
+                not LABEL_PATTERN.fullmatch(value.strip())):
             raise ValueError("Source label must be 1–48 printable characters without angle brackets")
         return value.strip()
     if rule["type"] == "bool":
@@ -89,7 +90,7 @@ def deserialize(key, value):
     return value
 
 
-def get(key):
+def get(key, fallback=None):
     if key not in SCHEMA:
         raise ValueError("Unsupported setting")
     try:
@@ -99,7 +100,7 @@ def get(key):
             return validate(key, deserialize(key, row["value"]))
     except (sqlite3.Error, ValueError, OSError):
         pass
-    return DEFAULTS[key]
+    return DEFAULTS[key] if fallback is None else fallback
 
 
 def all_settings():
