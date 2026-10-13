@@ -9,6 +9,7 @@ const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
 let privateManifest = '';
+let adminIdentity = {username: '', role: ''};
 
 
 async function api(path, method = 'GET', value = undefined) {
@@ -97,6 +98,17 @@ async function refresh(setForm = false) {
 $('sourceLabel').addEventListener('input', updatePreview);
 async function showDashboard() {
   await refresh(true);
+  const session = adminToken
+    ? {username: 'owner', role: 'owner'}
+    : await (await fetch(new URL('auth/session', adminApiRoot), {
+        cache: 'no-store', credentials: 'same-origin'
+      })).json();
+  adminIdentity = {username: session.username || 'owner', role: session.role || 'owner'};
+  $('adminIdentity').textContent = adminIdentity.username + ' · ' + adminIdentity.role;
+  $('adminUsersPanel').hidden = adminIdentity.role !== 'owner';
+  const writable = adminIdentity.role !== 'viewer';
+  for (const el of $('settingsForm').querySelectorAll('input,button')) el.disabled = !writable;
+  if (adminIdentity.role === 'owner') await loadAdminAccounts();
   const manifest = await api('/api/manifest');
   privateManifest = manifest.url;
   $('manifestUrl').type = 'password';
@@ -127,7 +139,7 @@ $('loginForm').addEventListener('submit', async (event) => {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-      body: JSON.stringify({password}),
+      body: JSON.stringify({username: $('loginUsername').value.trim().toLowerCase(), password}),
     });
     if (response.status === 429) throw new Error('Too many attempts. Try again in 15 minutes.');
     if (response.status === 503) throw new Error('Set the Admin password on HomeDocker via SSH first.');
@@ -233,6 +245,9 @@ $('logout').addEventListener('click', async () => {
   }
   adminToken = '';
   csrfToken = '';
+  adminIdentity = {username: '', role: ''};
+  $('adminIdentity').textContent = '';
+  $('adminUsersPanel').hidden = true;
   privateManifest = '';
   $('manifestUrl').value = '';
   $('manifestUrl').type = 'password';
@@ -244,4 +259,87 @@ $('logout').addEventListener('click', async () => {
   $('bridgeState').textContent = 'Not connected';
   $('sourceLabel').value = '';
   $('loginError').textContent = '';
+});
+
+
+// Owner-only human accounts, independent of Xtream provider profiles.
+// All DOM content from profile names is inserted using textContent.
+async function loadAdminAccounts() {
+  const response = await api('/api/admin-users');
+  const root = $('adminUsersList');
+  root.replaceChildren();
+  for (const account of response.users || []) {
+    const wrap = document.createElement('div');
+    wrap.className = 'admin-user-entry';
+    const info = document.createElement('span');
+    info.textContent = account.username + ' · ' + account.role +
+      (account.enabled ? ' · active' : ' · disabled');
+    wrap.append(info);
+    if (account.username !== 'owner') {
+      const toggle = document.createElement('button');
+      toggle.className = 'ghost';
+      toggle.textContent = account.enabled ? 'Disable' : 'Enable';
+      toggle.type = 'button';
+      toggle.addEventListener('click', async () => {
+        try {
+          await api('/api/admin-users/' + encodeURIComponent(account.username),
+                    'PATCH', {enabled: !account.enabled});
+          await loadAdminAccounts();
+        } catch (e) {
+          $('adminUsersMessage').textContent = e.message;
+        }
+      });
+      wrap.append(toggle);
+      const reset = document.createElement('button');
+      reset.className = 'ghost';
+      reset.type = 'button';
+      reset.textContent = 'Reset password';
+      reset.addEventListener('click', async () => {
+        const password = window.prompt('New password for ' + account.username + ' (14+ characters)');
+        if (!password) return;
+        try {
+          await api('/api/admin-users/' + encodeURIComponent(account.username),
+                    'PATCH', {password});
+          $('adminUsersMessage').textContent = 'Password changed; prior sessions revoked.';
+          await loadAdminAccounts();
+        } catch (e) {
+          $('adminUsersMessage').textContent = e.message;
+        }
+      });
+      wrap.append(reset);
+      const del = document.createElement('button');
+      del.className = 'ghost'; del.type = 'button'; del.textContent = 'Remove';
+      del.addEventListener('click', async () => {
+        if (!window.confirm('Remove Admin user ' + account.username + '?')) return;
+        try {
+          await api('/api/admin-users/' + encodeURIComponent(account.username), 'DELETE');
+          await loadAdminAccounts();
+        } catch (e) {
+          $('adminUsersMessage').textContent = e.message;
+        }
+      });
+      wrap.append(del);
+    }
+    root.append(wrap);
+  }
+}
+
+$('createAdminForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const payload = {
+    username: $('newAdminUsername').value.trim().toLowerCase(),
+    password: $('newAdminPassword').value,
+    role: $('newAdminRole').value
+  };
+  $('adminUsersMessage').textContent = '';
+  try {
+    await api('/api/admin-users', 'POST', payload);
+    $('createAdminForm').reset();
+    $('adminUsersMessage').textContent = 'New Admin user created.';
+    await loadAdminAccounts();
+  } catch (e) {
+    $('adminUsersMessage').textContent = e.message;
+  } finally {
+    $('newAdminPassword').value = '';
+  }
 });
