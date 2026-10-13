@@ -1117,7 +1117,7 @@ async def relay_stream(kind, sid, ext, request, filename=None, provider_id=None)
     if request.headers.get("range"):
         headers["Range"] = request.headers["range"]
     method = request.method
-    client = make_stream_client(trust_env=provider_id is None)
+    client = make_stream_client() if provider_id is None else make_stream_client(trust_env=False)
     try:
         # Redirects only to original provider host or explicitly approved CDN hosts.
         # Never use automatic redirects with an untrusted Location target.
