@@ -149,6 +149,7 @@ $('logout').addEventListener('click', () => {
 // Provider manager (staged/vault-only; no playback activation in this build).
 let activeProviderId = null;
 let profiles = [];
+let providerStreamingActivation = false;
 
 function clearProviderForm() {
   activeProviderId = null;
@@ -184,7 +185,7 @@ function drawProviders() {
     const description = providerText('div', p.base_url + ' · ' + p.username + ' · Priority ' + p.priority);
     description.className = 'small muted';
     detail.append(description);
-    const badge = providerText('div', 'Staged · not streaming');
+    const badge = providerText('div', p.enabled ? 'Active · stream-ready' : 'Staged · not streaming');
     badge.className = 'small muted';
     detail.append(badge);
     const buttons = document.createElement('div');
@@ -218,6 +219,35 @@ function drawProviders() {
         $('providerSaveStatus').textContent = e.message;
       }
     });
+    if (providerStreamingActivation) {
+      const sync = providerText('button', 'Sync catalog');
+      sync.type = 'button'; sync.className = 'ghost';
+      sync.addEventListener('click', async () => {
+        sync.disabled = true;
+        $('providerSaveStatus').textContent = 'Indexing provider catalog…';
+        try {
+          const result = await api('/api/providers/' + encodeURIComponent(p.id) + '/sync', 'POST');
+          $('providerSaveStatus').textContent = 'Indexed ' + (result.indexed ?? 0) + ' entries.';
+          await loadProviders();
+        } catch (e) {
+          $('providerSaveStatus').textContent = e.message;
+        } finally { sync.disabled = false; }
+      });
+      const activate = providerText('button', p.enabled ? 'Disable source' : 'Activate source');
+      activate.type = 'button'; activate.className = 'ghost';
+      activate.addEventListener('click', async () => {
+        activate.disabled = true;
+        try {
+          await api('/api/providers/' + encodeURIComponent(p.id) + '/activation',
+                    'POST', {enabled: !p.enabled});
+          $('providerSaveStatus').textContent = p.enabled
+            ? 'Provider disabled from new streams' : 'Provider active in new stream requests';
+          await loadProviders();
+        } catch (e) { $('providerSaveStatus').textContent = e.message; }
+        finally { activate.disabled = false; }
+      });
+      buttons.append(sync, activate);
+    }
     buttons.append(edit, del);
     item.append(detail, buttons);
     root.append(item);
@@ -233,6 +263,7 @@ async function loadProviders() {
     $('providerSaveStatus').textContent = 'Provider vault is read-only until the server key file is securely mounted.';
   }
   profiles = data.providers || [];
+  providerStreamingActivation = data.streaming_activation === true;
   drawProviders();
 }
 
