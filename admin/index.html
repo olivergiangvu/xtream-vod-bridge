@@ -12,13 +12,15 @@
   <div class="shell">
     <header class="topbar">
       <div class="mark"><span class="glyph">X</span><div><div class="product">Xtream VOD Bridge</div><div class="muted small">HomeDocker · Private Console</div></div></div>
-      <div class="toolbar"><span id="bridgeState" class="state">Not connected</span><button id="refresh" class="ghost" hidden>Refresh stats</button><button id="logout" class="ghost" hidden>Lock</button></div>
+      <div class="toolbar"><span class="small muted" id="adminIdentity"></span><span id="bridgeState" class="state">Not connected</span><button id="refresh" class="ghost" hidden>Refresh stats</button><button id="logout" class="ghost" hidden>Lock</button></div>
     </header>
     <section id="login" class="login-panel">
       <div class="eyebrow">LOCAL ADMIN</div>
       <h1>Connect to your bridge</h1>
       <p>Sign in with your HomeDocker Admin password. Your browser keeps a secure session for up to 12 hours—no token to copy for everyday use.</p>
       <form id="loginForm">
+        <label for="loginUsername">Admin username</label>
+        <input id="loginUsername" type="text" name="username" value="owner" pattern="[a-z][a-z0-9_-]{2,31}" autocomplete="username" spellcheck="false" required maxlength="32">
         <label for="secret">Admin password</label>
         <input id="secret" type="password" name="password" autocomplete="current-password" spellcheck="false" required placeholder="Enter Admin password" minlength="14">
         <button type="submit" class="primary">Sign in</button>
@@ -90,6 +92,22 @@
           <section class="panel"><div class="panel-header"><div><div class="eyebrow">DIAGNOSTICS</div><h2>Recent events</h2></div><span class="small muted">Last 40</span></div><div class="events-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Status</th><th>ms / #</th></tr></thead><tbody id="events"><tr><td colspan="4" class="muted">No events yet</td></tr></tbody></table></div><p class="small muted">Redacted logs contain only event type, status, duration and stream count. Never provider URLs, logins or tokens.</p></section>
         </div>
       </div>
+      <section class="panel" id="adminUsersPanel" hidden aria-label="Admin user management">
+        <div class="panel-header"><div><div class="eyebrow">ACCESS MANAGEMENT</div><h2>Admin Users</h2></div><span class="soft-pill">Owner only</span></div>
+        <p class="muted">Each person has their own username and password. Admin can change bridge settings; Viewer can see metrics and diagnostics. These accounts are separate from Xtream provider credentials.</p>
+        <div id="adminUsersList" class="admin-user-list"></div>
+        <form id="createAdminForm" autocomplete="off">
+          <div class="form-grid">
+            <div><label for="newAdminUsername">New username</label><input id="newAdminUsername" required autocomplete="off" maxlength="32" pattern="[a-z][a-z0-9_-]{2,31}" placeholder="e.g. admin2"></div>
+            <div><label for="newAdminRole">Role</label>
+              <select id="newAdminRole"><option value="admin">Admin</option><option value="viewer">Viewer</option></select>
+            </div>
+          </div>
+          <label for="newAdminPassword">Initial password (14+ characters)</label>
+          <input id="newAdminPassword" type="password" minlength="14" maxlength="128" autocomplete="new-password" required>
+          <div class="buttons"><button type="submit" class="primary">Create Admin user</button><span id="adminUsersMessage" class="small muted" role="status"></span></div>
+        </form>
+      </section>
       <footer class="muted small">LAN-restricted HTTPS or SSH console · Separate Docker admin port · Settings stored in existing SQLite volume · Signed playback unchanged</footer>
     </main>
   </div>
