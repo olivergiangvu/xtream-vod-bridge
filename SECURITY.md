@@ -27,6 +27,21 @@ Raise security issues privately with the repository owner. Do not paste sensitiv
 
 Unapproved provider redirects are rejected, and approved CDN redirects are host/port-restricted (mocked tests only). Remaining gaps: rate abuse of a publicly reachable streaming endpoint, DNS/egress policy for approved provider domains, hostile playlist contents, real provider integration tests, HLS playlist rewriting, and reproducible dependency lock. Do not publish as an unrestricted Internet service before addressing these limitations.
 
+## Same-port LAN admin proxy (v0.4.1 proposal)
+
+The existing 18450 HTTPS listener may serve /admin/ through a **strict
+location-level LAN address ACL**, proxying to the independently authenticated
+127.0.0.1:18768 backend. This does not imply the public listener is now
+LAN-only: ASUS WAN/hairpin SNAT can present a public request as an allowed
+LAN address. Verify a genuine WAN request is blocked at nginx, or add an
+independent ingress authentication factor. Keep all credential-management
+features disabled until this is demonstrated. No additional port-forward and
+no 0.0.0.0 bind for the admin container.
+
+The frontend uses relative asset and API paths and includes no credentials
+in JS/HTML. The existing manifest, playback and HMAC paths stay unchanged.
+See [docs/admin-shared-18450.md](docs/admin-shared-18450.md).
+
 ## Private admin console (v0.4 pilot)
 The admin UI runs in a **separate** Docker service on `127.0.0.1:18768`, not behind public nginx on 18450. Connect using an SSH tunnel. Do not forward admin port on the router, proxy admin into public nginx, or expose `0.0.0.0:18768`.
 API requests require `Authorization: Bearer <ADMIN_TOKEN>`; the UI never stores it in localStorage, cookies or the URL (memory only). It is invalidated on page refresh.
