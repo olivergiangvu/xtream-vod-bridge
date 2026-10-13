@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 EXPECTED_BLOBS = {
-    "admin_ui.py": "af816e9f9f40c02b7dcb3dc2217de3898103d19c",
+    "admin_ui.py": "a7083112ace23c633601754a6e1c19210be3723f",
     "admin_auth.py": "ecd3cd695c2046357d7fe36cd4458bff5ddd7774",
 }
 HOST_ROOT = Path("/opt/xtream-vod-bridge")
@@ -87,10 +87,19 @@ def prepare(root: Path, source_dir: Path):
             "form shape",
         ),
         (
+            '        fields = parse_qs(body.decode("utf-8"), strict_parsing=True,\n'
+            '                          max_num_fields=3)',
+            '        fields = parse_qs(body.decode("utf-8"), strict_parsing=True,\n'
+            '                          keep_blank_values=True, max_num_fields=3)',
+            "parse nonempty username",
+        ),
+        (
             '        password = fields["password"][0]\n',
             '        password = fields["password"][0]\n'
             '        # Backwards-compatible with an already-open, password-only form.\n'
-            '        username = fields.get("username", ["owner"])[0]\n',
+            '        username = fields.get("username", ["owner"])[0]\n'
+            '        if not nonce or not password:\n'
+            '            raise ValueError("Invalid form")\n',
             "username parsing",
         ),
         (
