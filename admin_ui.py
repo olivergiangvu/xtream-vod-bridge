@@ -154,6 +154,8 @@ def provider_delete(provider_id: str):
         raise HTTPException(503, "Provider encryption key is not configured") from None
     except KeyError:
         raise HTTPException(404, "Provider not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 
