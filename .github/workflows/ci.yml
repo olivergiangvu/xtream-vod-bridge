@@ -3,7 +3,6 @@ on:
   push:
     branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay', 'fix/v0.4.2-safari-form-login', 'fix/v0.4.2-safari-form-origin', 'fix/v0.4.2-safari-null-origin-referrer']
   pull_request:
-    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay', 'fix/v0.4.2-safari-form-login', 'fix/v0.4.2-safari-form-origin', 'fix/v0.4.2-safari-null-origin-referrer']
   workflow_dispatch:
 
 permissions:
