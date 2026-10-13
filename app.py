@@ -40,6 +40,9 @@ SYNC_HOURS = max(1, int(os.getenv("SYNC_HOURS", "6")))
 MAX_ENRICH = max(0, int(os.getenv("MAX_ENRICH_PER_SYNC", "250")))
 SERIES_SYNC_QUOTA = max(0, int(os.getenv("SERIES_ENRICH_PER_SYNC", "40")))
 SERIES_BOOTSTRAP_BATCH = max(0, int(os.getenv("SERIES_BOOTSTRAP_BATCH", "0")))
+# Dedicated isolated canary containers must not bootstrap the legacy IPTV source.
+# Production/default remains enabled, with no change in legacy sync cadence.
+LEGACY_SYNC_ENABLED = os.getenv("LEGACY_SYNC_ENABLED", "1") == "1"
 SERIES_BOOTSTRAP_INTERVAL_MINUTES = max(
     15, int(os.getenv("SERIES_BOOTSTRAP_INTERVAL_MINUTES", "30"))
 )
@@ -763,9 +766,10 @@ async def loop():
 async def lifespan(_app):
     check_settings()
     init_db()
-    task = asyncio.create_task(loop())
+    task = asyncio.create_task(loop()) if LEGACY_SYNC_ENABLED else None
     bootstrap = (asyncio.create_task(series_bootstrap_loop())
-                 if not MOVIES_ONLY and SERIES_BOOTSTRAP_BATCH > 0 else None)
+                 if LEGACY_SYNC_ENABLED and not MOVIES_ONLY
+                 and SERIES_BOOTSTRAP_BATCH > 0 else None)
     try:
         yield
     finally:
