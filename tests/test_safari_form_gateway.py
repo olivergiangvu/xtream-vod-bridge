@@ -66,6 +66,71 @@ class SafariFormGatewayTests(unittest.TestCase):
             follow_redirects=False
         )
 
+    def test_native_password_manager_form_fields(self):
+        form = self.client.get("/gateway/")
+        self.assertEqual(form.status_code, 200)
+        html = form.text
+        self.assertIn("<title>Sign in · Xtream VOD Bridge</title>", html)
+        self.assertIn('name="username" type="text" value="owner"', html)
+        self.assertIn('autocomplete="username"', html)
+        self.assertIn('name="password" type="password"', html)
+        self.assertIn('autocomplete="current-password"', html)
+        self.assertIn('method="post" action="/admin-signin/" autocomplete="on"', html)
+        self.assertIn('name="nonce"', html)
+        self.assertIn("No separate nginx Gateway password", html)
+        self.assertNotIn(PASSWORD, html)
+        self.assertIn("script-src 'none'", form.headers["Content-Security-Policy"])
+
+    def test_named_owner_login_and_wrong_username_counted(self):
+        nonce = self.open_form()
+        cookie = {admin_ui.GATE_LOGIN_COOKIE: nonce}
+        wrong = self.client.post(
+            "/gateway/",
+            data={"username": "admin", "password": PASSWORD, "nonce": nonce},
+            headers={"Origin": ORIGIN},
+            cookies=cookie,
+            follow_redirects=False,
+        )
+        self.assertEqual(wrong.status_code, 401)
+        self.assertIn("Incorrect username or password", wrong.text)
+        self.assertNotIn(PASSWORD, wrong.text)
+        with ops.database() as con:
+            guard = con.execute(
+                "SELECT attempts FROM admin_login_guard WHERE id=1"
+            ).fetchone()
+        self.assertEqual(guard["attempts"], 1)
+
+        retry = self.client.get("/gateway/")
+        fresh_nonce = re.search(
+            r'name="nonce" value="([^"]+)"', retry.text
+        ).group(1)
+        success = self.client.post(
+            "/gateway/",
+            data={"username": "owner", "password": PASSWORD, "nonce": fresh_nonce},
+            headers={"Origin": ORIGIN},
+            cookies={admin_ui.GATE_LOGIN_COOKIE: fresh_nonce},
+            follow_redirects=False,
+        )
+        self.assertEqual(success.status_code, 303)
+        self.assertEqual(success.headers["location"], "/admin/")
+
+    def test_json_login_preserves_password_only_clients(self):
+        legacy = self.client.post(
+            "/api/auth/login", json={"password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(legacy.status_code, 200)
+        owner = self.client.post(
+            "/api/auth/login", json={"username": "owner", "password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(owner.status_code, 200)
+        wrong = self.client.post(
+            "/api/auth/login", json={"username": "admin", "password": PASSWORD},
+            headers={"Origin": ORIGIN},
+        )
+        self.assertEqual(wrong.status_code, 401)
+
     def test_non_login_admin_response_keeps_no_referrer(self):
         response = self.client.get("/api/auth/session")
         self.assertEqual(response.status_code, 200)
