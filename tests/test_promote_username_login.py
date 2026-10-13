@@ -79,7 +79,8 @@ class PromotionTests(unittest.TestCase):
                 '    # password-verification flow so invalid usernames share rate limiting.\n',
                 'def login(password):\n',
             ).replace(
-                '        valid_username = isinstance(username, str) and hmac.compare_digest(username, "owner")\n'
+                '        valid_username = (isinstance(username, str) and len(username) <= 64\n'
+                '                          and hmac.compare_digest(username.encode("utf-8"), b"owner"))\n'
                 '        good = _verify(password, account) and valid_username\n',
                 '        good = _verify(password, account)\n',
             )
@@ -91,7 +92,7 @@ class PromotionTests(unittest.TestCase):
             self.assertIn('autocomplete="current-password"', prepared["admin_ui.py"])
             self.assertIn('<meta name="referrer" content="same-origin">', prepared["admin_ui.py"])
             self.assertIn('response.headers["Referrer-Policy"] = "same-origin"', prepared["admin_ui.py"])
-            self.assertIn('valid_username = isinstance(username, str)', prepared["admin_auth.py"])
+            self.assertIn('valid_username = (isinstance(username, str)', prepared["admin_auth.py"])
             self.assertEqual(
                 (local_dir / "admin_ui.py").read_text(), local_ui,
                 "Preflight must not modify live files",
