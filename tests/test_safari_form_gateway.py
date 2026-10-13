@@ -80,7 +80,6 @@ class SafariFormGatewayTests(unittest.TestCase):
     def test_login_rejects_forged_origin_nonce_and_password(self):
         nonce = self.open_form()
         self.assertEqual(self.form_request(nonce, origin="https://evil.invalid").status_code, 403)
-        self.assertEqual(self.form_request(nonce, extra_cookie="").status_code, 303) if False else None
         self.assertEqual(self.form_request(nonce, extra_cookie="bad_cookie=123").status_code, 403)
         bad = self.form_request(nonce, password="bad password phrase")
         self.assertEqual(bad.status_code, 401)
