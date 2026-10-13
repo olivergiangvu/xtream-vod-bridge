@@ -48,7 +48,12 @@ async def security_headers(request, call_next):
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Native HTML POST needs a real Origin (no-referrer sets it to "null").
+    # Keep the restrictive policy on every other Admin response.
+    response.headers["Referrer-Policy"] = (
+        "strict-origin-when-cross-origin" if request.url.path.startswith("/gateway/")
+        else "no-referrer"
+    )
     response.headers["X-Frame-Options"] = "DENY"
     if request.url.path.startswith("/gateway/"):
         response.headers["Content-Security-Policy"] = (
@@ -97,7 +102,7 @@ def _gate_page(message: str, nonce: str):
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
+<meta name="referrer" content="strict-origin-when-cross-origin">
 <title>HomeDocker Admin — Sign in</title>
 <style>
 :root{{color-scheme:dark}}body{{font:16px system-ui,sans-serif;background:#091522;color:#eaf2fc;
