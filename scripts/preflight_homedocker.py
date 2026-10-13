@@ -48,7 +48,20 @@ def docker_claims_port(ps_output: str, port: int) -> bool:
     return False
 
 
-def existing_nginx_paths() -> tuple[bool, bool]:
+def public_base_url_ok(value: str) -> bool:
+    """Public base may use domain:port root OR an nginx path prefix."""
+    try:
+        p = urlsplit(value)
+        port = p.port
+        return (p.scheme == "https" and bool(p.hostname) and
+                not p.username and not p.password and not p.query and
+                not p.fragment and (port is None or 1 <= port <= 65535) and
+                "//" not in p.path)
+    except ValueError:
+        return False
+
+
+def existing_nginx_paths(port: int = 18767) -> tuple[bool, bool]:
     """Best effort location-conflict signal; never print nginx contents."""
     found_path = False
     found_proxy_port = False
@@ -68,7 +81,7 @@ def existing_nginx_paths() -> tuple[bool, bool]:
             except (OSError, UnicodeError):
                 continue
             found_path |= bool(re.search(r"location\s+[^\n;{}]*?/xtream-vod/", content))
-            found_proxy_port |= bool(re.search(r"proxy_pass\s+http://127\.0\.0\.1:18767", content))
+            found_proxy_port |= bool(re.search(rf"proxy_pass\s+http://127\.0\.0\.1:{port}(?:/|[;\s])", content))
     return found_path, found_proxy_port
 
 
@@ -105,14 +118,11 @@ def main() -> int:
 
     nginx_code, _ = run(["nginx", "-t", "-q"])
     observations["nginx_test_pass"] = nginx_code == 0
-    path_exists, proxy_exists = existing_nginx_paths()
+    path_exists, proxy_exists = existing_nginx_paths(args.port)
     observations["existing_xtream_nginx_location"] = path_exists
     observations["existing_xtream_nginx_proxy"] = proxy_exists
     if args.public_base_url:
-        p = urlsplit(args.public_base_url)
-        observations["public_base_url_format_ok"] = (p.scheme == "https" and
-            bool(p.hostname) and p.path.rstrip("/") == "/xtream-vod" and
-            not p.username and not p.password and not p.query and not p.fragment)
+        observations["public_base_url_format_ok"] = public_base_url_ok(args.public_base_url)
 
     conflict = bool(observations.get("docker_port_conflict") or
                     observations.get("tcp_port_in_use") or path_exists or proxy_exists)
