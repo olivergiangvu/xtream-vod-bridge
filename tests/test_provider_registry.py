@@ -93,6 +93,7 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertEqual(vault.get_credentials(uid)["password"], "REPLACED-PASSWORD-999")
         wrong_key = Path(self.tmp.name) / "wrong.key"
         wrong_key.write_bytes(Fernet.generate_key())
+        os.chmod(wrong_key, 0o600)
         with patch.object(vault, "KEY_FILE", wrong_key):
             read = self.client.get("/api/providers", headers=self.auth)
             self.assertEqual(read.status_code, 503)
