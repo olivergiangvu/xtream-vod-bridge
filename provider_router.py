@@ -240,7 +240,8 @@ async def hydrate(uid, sid, season, episode, bridge):
 
 def signed_url(uid, kind, sid, identity, filename, bridge):
     expiry = int(time.time()) + bridge.PLAY_HOURS * 3600
-    payload = f"v3:{uid}:{kind}:{sid}:{identity}:{expiry}:{filename}"
+    revision = vault.credential_revision(uid)
+    payload = f"v3:{uid}:{revision}:{kind}:{sid}:{identity}:{expiry}:{filename}"
     mac = hmac.new(bridge.SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return bridge.PUBLIC + (
         f"/play/provider/{uid}/{kind}/{sid}/{identity}/{expiry}/{mac}/"
