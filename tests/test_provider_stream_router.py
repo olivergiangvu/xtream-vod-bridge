@@ -99,6 +99,37 @@ class ProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(router.existing_stream(self.a, "movie", 77, "mkv"))
         self.assertTrue(router.existing_stream(self.b, "movie", 77, "mkv"))
 
+    async def test_credential_rotation_invalidates_signed_links_and_scoped_cache(self):
+        await self.index_both()
+        old = (await router.resolve_streams("movie", "tt1234567", bridge))[0]["url"]
+        from urllib.parse import urlsplit
+        args = urlsplit(old).path.split("/play/provider/", 1)[1].split("/")[:7]
+        self.assertTrue(router.valid_signature(*args, bridge))
+        with self.assertRaises(ValueError):
+            vault.update_profile(self.a, {"password": "rotated-before-disable"})
+        with self.assertRaises(ValueError):
+            vault.delete_profile(self.a)
+        vault.set_active(self.a, False)
+        vault.update_profile(self.a, {"base_url": "https://new.example.org",
+                                      "password": "rotated-secret"})
+        with ops.database() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM provider_items "
+                                         "WHERE provider_id=?", (self.a,)).fetchone()[0], 0)
+        await self.index_both_after_rotation()
+        self.assertFalse(router.valid_signature(*args, bridge))
+        new = (await router.resolve_streams("movie", "tt1234567", bridge))[0]["url"]
+        self.assertNotEqual(old, new)
+
+    async def index_both_after_rotation(self):
+        async def new_catalog(creds, action, **kwargs):
+            if action == "get_vod_streams":
+                return [{"stream_id": 77, "name": "4K Example Movie",
+                         "container_extension": "mkv", "imdb_id": "tt1234567"}]
+            return []
+        with patch.object(router, "provider_api", new=new_catalog):
+            await router.sync_profile(self.a, bridge)
+        vault.set_active(self.a, True)
+
     async def test_series_cache_scoped_per_provider_and_warm_request(self):
         await self.index_both()
         calls = []
