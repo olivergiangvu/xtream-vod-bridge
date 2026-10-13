@@ -63,6 +63,24 @@
           <section class="panel"><div class="panel-header"><div><div class="eyebrow">DIAGNOSTICS</div><h2>Recent events</h2></div><span class="small muted">Last 40</span></div><div class="events-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Status</th><th>ms / #</th></tr></thead><tbody id="events"><tr><td colspan="4" class="muted">No events yet</td></tr></tbody></table></div><p class="small muted">Redacted logs contain only event type, status, duration and stream count. Never provider URLs, logins or tokens.</p></section>
         </div>
       </div>
+      <section class="panel" style="margin-top:20px" id="providerManager">
+        <div class="panel-header"><div><div class="eyebrow">PROVIDER VAULT · PREVIEW</div><h2>Xtream accounts</h2></div><span class="soft-pill" id="providerKey">Checking encryption key</span></div>
+        <p class="muted">Add multiple provider profiles using encrypted credential storage. This development preview does not activate any new provider for playback yet; current Meteor/legacy playback is not changed.</p>
+        <div id="providerRows" aria-label="Saved providers" class="provider-list"></div>
+        <form id="providerForm" autocomplete="off">
+          <h3 id="providerFormTitle">Add a provider</h3>
+          <label for="providerLabel">Display name</label><input id="providerLabel" maxlength="48" required placeholder="e.g. IPTV Backup" autocomplete="off">
+          <label for="providerUrl">Xtream HTTPS base URL</label><input id="providerUrl" type="url" maxlength="512" required placeholder="https://provider.example.com" autocomplete="off">
+          <div class="form-grid">
+            <div><label for="providerUsername">Username</label><input id="providerUsername" maxlength="256" required autocomplete="off"></div>
+            <div><label for="providerPriority">Priority</label><input id="providerPriority" type="number" min="0" max="1000" value="100" required></div>
+          </div>
+          <label for="providerPassword">Password <span id="passwordHint" class="small muted">required for new profiles</span></label>
+          <div class="password-row"><input id="providerPassword" type="password" maxlength="512" autocomplete="new-password" required placeholder="Enter password"><button type="button" class="ghost" id="showProviderPassword">Show</button></div>
+          <div class="buttons"><button type="submit" class="primary" id="providerSave">Save encrypted profile</button><button type="button" id="providerReset" class="ghost">Cancel edit</button><span class="small muted" id="providerSaveStatus" role="status"></span></div>
+        </form>
+        <p class="muted small">Passwords are write-only. Empty password when editing means unchanged. Provider activation is blocked until the provider-aware indexing and signed playback migration is validated.</p>
+      </section>
       <footer class="muted small">Local-only console · Separate Docker admin port · Settings stored in existing SQLite volume · Signed playback unchanged</footer>
     </main>
   </div>
