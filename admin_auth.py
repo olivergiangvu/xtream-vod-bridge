@@ -161,7 +161,8 @@ def login(password, username="owner"):
         ).fetchone()
         if account is None:
             raise RuntimeError("Admin password not provisioned")
-        valid_username = isinstance(username, str) and hmac.compare_digest(username, "owner")
+        valid_username = (isinstance(username, str) and len(username) <= 64
+                          and hmac.compare_digest(username.encode("utf-8"), b"owner"))
         good = _verify(password, account) and valid_username
         if not good:
             attempts = 1
