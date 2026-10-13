@@ -1,5 +1,6 @@
 'use strict';
-let adminToken = '';
+let adminToken = ''; // Emergency bearer auth only; never stored in browser storage.
+let csrfToken = ''; // Random per-session CSRF value; held in JS memory only.
 // Relative to this document: /admin/ -> /admin/api/; direct / -> /api/.
 // Do not route admin API requests to the public addon /api/ root on 18450.
 const adminApiRoot = new URL('api/', document.baseURI);
@@ -10,17 +11,20 @@ let polling = null;
 
 async function api(path, method = 'GET', value = undefined) {
   const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
+  const mutating = ['PUT', 'POST', 'PATCH', 'DELETE'].includes(method);
   const response = await fetch(new URL(suffix, adminApiRoot), {
     method,
     cache: 'no-store',
+    credentials: 'same-origin',
     headers: {
-      'Authorization': 'Bearer ' + adminToken,
+      ...(adminToken ? {'Authorization': 'Bearer ' + adminToken} : {}),
+      ...(!adminToken && mutating ? {'X-CSRF-Token': csrfToken} : {}),
       'Accept': 'application/json',
       ...(value === undefined ? {} : {'Content-Type': 'application/json'}),
     },
     ...(value === undefined ? {} : {body: JSON.stringify(value)}),
   });
-  if (response.status === 401) throw new Error('Authentication rejected. Check ADMIN_TOKEN.');
+  if (response.status === 401) throw new Error('Please sign in again.');
   if (!response.ok) {
     if (response.status === 422) {
       const failure = await response.json();
@@ -89,25 +93,80 @@ async function refresh(setForm = false) {
 }
 
 $('sourceLabel').addEventListener('input', updatePreview);
+async function showDashboard() {
+  await refresh(true);
+  $('secret').value = '';
+  $('legacySecret').value = '';
+  $('login').hidden = true;
+  $('main').hidden = false;
+  $('refresh').hidden = false;
+  $('logout').hidden = false;
+  if (polling) clearInterval(polling);
+  polling = setInterval(() => refresh(false).catch(() => {
+    $('bridgeState').textContent = 'Refresh failed';
+  }), 15000);
+}
+
 $('loginForm').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const candidate = $('secret').value.trim();
   $('loginError').textContent = '';
-  adminToken = candidate;
+  adminToken = '';
+  csrfToken = '';
+  const password = $('secret').value;
   try {
-    await refresh(true);
+    const response = await fetch(new URL('auth/login', adminApiRoot), {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: JSON.stringify({password}),
+    });
+    if (response.status === 429) throw new Error('Too many attempts. Try again in 15 minutes.');
+    if (response.status === 503) throw new Error('Set the Admin password on HomeDocker via SSH first.');
+    if (!response.ok) throw new Error('Invalid password, or this access route is not approved.');
+    const result = await response.json();
+    csrfToken = result.csrf_token;
+    await showDashboard();
+  } catch (error) {
+    $('loginError').textContent = error.message;
+  } finally {
     $('secret').value = '';
-    $('login').hidden = true; $('main').hidden = false;
-    $('refresh').hidden = false; $('logout').hidden = false;
-    if (polling) clearInterval(polling);
-    polling = setInterval(() => refresh(false).catch(() => {
-      $('bridgeState').textContent = 'Refresh failed';
-    }), 15000);
+  }
+});
+
+$('legacyLoginForm').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  adminToken = $('legacySecret').value.trim();
+  csrfToken = '';
+  $('loginError').textContent = '';
+  try {
+    await showDashboard();
   } catch (error) {
     adminToken = '';
     $('loginError').textContent = error.message;
+  } finally {
+    $('legacySecret').value = '';
   }
 });
+
+async function restoreSession() {
+  try {
+    const response = await fetch(new URL('auth/session', adminApiRoot), {
+      cache: 'no-store', credentials: 'same-origin',
+    });
+    if (!response.ok) return;
+    const result = await response.json();
+    $('setupHint').hidden = result.password_ready !== false;
+    if (result.authenticated && result.csrf_token) {
+      csrfToken = result.csrf_token;
+      adminToken = '';
+      await showDashboard();
+    }
+  } catch (_) {
+    $('setupHint').hidden = false;
+  }
+}
+restoreSession();
 
 $('settingsForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -137,8 +196,12 @@ $('refresh').addEventListener('click', async () => {
   try { await refresh(false); } catch (error) { $('bridgeState').textContent = error.message; }
 });
 
-$('logout').addEventListener('click', () => {
+$('logout').addEventListener('click', async () => {
+  if (!adminToken && csrfToken) {
+    try { await api('/api/auth/logout', 'POST'); } catch (_) {}
+  }
   adminToken = '';
+  csrfToken = '';
   if (polling) { clearInterval(polling); polling = null; }
   $('main').hidden = true;
   $('login').hidden = false;
