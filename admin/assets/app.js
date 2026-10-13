@@ -10,6 +10,7 @@ const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
 let refreshInFlight = null;
 let privateManifest = ''; // Private addon credential; in-memory only.
+let manifestEpoch = 0; // Discard late responses after Lock/session expiry.
 
 async function api(path, method = 'GET', value = undefined) {
   const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
@@ -29,8 +30,7 @@ async function api(path, method = 'GET', value = undefined) {
   // nginx redirects expired /admin/ sessions to the public sign-in gateway.
   // A redirected HTML page is not an API success response.
   if (response.redirected && new URL(response.url).pathname.startsWith('/admin-signin/')) {
-    privateManifest = '';
-    $('manifestUrl').value = '';
+    concealManifest();
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
     }
@@ -131,6 +131,7 @@ async function refresh(setForm = false) {
 // The addon token is only fetched by the authenticated Admin API.
 // Mask it by default, never persist to browser storage or print to logs.
 function concealManifest() {
+  manifestEpoch += 1;
   privateManifest = '';
   const input = $('manifestUrl');
   input.type = 'password';
@@ -143,9 +144,11 @@ function concealManifest() {
 
 async function prepareManifest() {
   concealManifest();
+  const epoch = manifestEpoch;
   $('manifestStatus').textContent = 'Loading private manifest…';
   try {
     const data = await api('/api/manifest');
+    if (epoch !== manifestEpoch) return;
     if (typeof data.url !== 'string' || !data.url.startsWith('https://')) {
       throw new Error('Manifest URL is unavailable.');
     }
@@ -154,7 +157,9 @@ async function prepareManifest() {
     $('manifestCopy').disabled = false;
     $('manifestStatus').textContent = 'Ready · URL hidden for privacy.';
   } catch (error) {
-    $('manifestStatus').textContent = 'Manifest unavailable: ' + error.message;
+    if (epoch === manifestEpoch) {
+      $('manifestStatus').textContent = 'Manifest unavailable: ' + error.message;
+    }
   }
 }
 
