@@ -25,16 +25,7 @@ done
 PROD_ADMIN_BEFORE=$(sudo docker inspect -f '{{.Id}}' xtream-vod-admin)
 PROD_PLAY_BEFORE=$(sudo docker inspect -f '{{.Id}}' xtream-vod-bridge)
 
-python3 - <<'PY'
-import socket
-for port in (18769, 18770):
-    with socket.socket() as sock:
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            raise SystemExit("STOP: canary loopback port occupied: " + str(port))
-print("CANARY_PORTS=FREE")
-PY
+echo "CANARY_INGRESS=NOT_PUBLISHED (offline Stage 1)"
 
 sudo install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$ROOT"
 git clone --quiet --depth 1 --filter=blob:none --no-checkout "$REPO" "$SRC"
@@ -102,23 +93,35 @@ echo "CANARY_ADMIN_HEALTH=$B"
   echo "STOP: inspect canary only; production unchanged"; exit 1;
 }
 
-python3 - <<'PY'
+# Network is internal: true. Docker Engine does not expose host listeners
+# on this isolated network. Probe via docker exec instead of host localhost.
+# No production ports, router rules, or nginx changes are needed.
+sudo docker exec xtream-vod-canary-playback python -c '
 import json
+import urllib.request
+r = urllib.request.urlopen("http://127.0.0.1:8767/health", timeout=8)
+assert r.status == 200 and json.load(r)["status"] == "ok"
+print("CANARY_PLAYBACK_HTTP=PASS")
+'
+
+sudo docker exec xtream-vod-canary-admin python -c '
 from urllib.error import HTTPError
-from urllib.request import urlopen
-with urlopen("http://127.0.0.1:18769/health", timeout=8) as r:
-    assert json.load(r)["status"] == "ok"
-def code(path):
+from urllib.request import build_opener, ProxyHandler, Request
+opener = build_opener(ProxyHandler({}))
+def status(path):
     try:
-        with urlopen("http://127.0.0.1:18770" + path, timeout=8) as r:
-            return r.status
+        with opener.open(Request("http://127.0.0.1:8768" + path), timeout=8) as resp:
+            return resp.status
     except HTTPError as exc:
         return exc.code
-assert code("/api/auth/session") == 200
-assert code("/api/my/sources") == 401
-assert code("/api/my/manifests") == 401
-print("CANARY_HTTP_SMOKE=PASS")
-PY
+for path, expected in (("/", 200), ("/api/auth/session", 200),
+                       ("/api/my/sources", 401), ("/api/my/manifests", 401)):
+    actual = status(path)
+    assert actual == expected, (path, actual, expected)
+print("CANARY_ADMIN_HTTP=PASS")
+'
+
+echo "CANARY_HTTP_SMOKE=PASS"
 
 test "$PROD_ADMIN_BEFORE" = "$(sudo docker inspect -f '{{.Id}}' xtream-vod-admin)"
 test "$PROD_PLAY_BEFORE" = "$(sudo docker inspect -f '{{.Id}}' xtream-vod-bridge)"
