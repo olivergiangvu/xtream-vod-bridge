@@ -114,6 +114,20 @@ class SafariFormGatewayTests(unittest.TestCase):
             ).fetchone()["attempts"]
         self.assertEqual(attempts, 2)
 
+        blank_name = self.client.post(
+            "/gateway/",
+            data={"username": "", "password": PASSWORD, "nonce": nonce},
+            headers={"Origin": ORIGIN},
+            cookies=cookie,
+            follow_redirects=False,
+        )
+        self.assertEqual(blank_name.status_code, 401)
+        with ops.database() as con:
+            attempts = con.execute(
+                "SELECT attempts FROM admin_login_guard WHERE id=1"
+            ).fetchone()["attempts"]
+        self.assertEqual(attempts, 3)
+
         retry = self.client.get("/gateway/")
         fresh_nonce = re.search(
             r'name="nonce" value="([^"]+)"', retry.text
