@@ -61,7 +61,7 @@ def validate(key, value):
         raise ValueError("Unsupported setting")
     rule = SCHEMA[key]
     if rule["type"] == "label":
-        if (not isinstance(value, str) or "\\\\" in value or
+        if (not isinstance(value, str) or chr(92) in value or
                 not LABEL_PATTERN.fullmatch(value.strip())):
             raise ValueError("Source label must be 1–48 printable characters without angle brackets")
         return value.strip()
