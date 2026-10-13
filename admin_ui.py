@@ -218,13 +218,15 @@ async def gateway_login_submit(request: Request):
         raise HTTPException(413)
     try:
         fields = parse_qs(body.decode("utf-8"), strict_parsing=True,
-                          max_num_fields=3)
+                          keep_blank_values=True, max_num_fields=3)
         if set(fields) not in ({"password", "nonce"}, {"password", "nonce", "username"}) or any(len(v) != 1 for v in fields.values()):
             raise ValueError("Invalid form")
         nonce = fields["nonce"][0]
         password = fields["password"][0]
         # Backwards-compatible with an already-open, password-only form.
         username = fields.get("username", ["owner"])[0]
+        if not nonce or not password:
+            raise ValueError("Invalid form")
     except (UnicodeError, ValueError):
         raise HTTPException(400, "Invalid login form") from None
     cookie_nonce = request.cookies.get(GATE_LOGIN_COOKIE, "")
