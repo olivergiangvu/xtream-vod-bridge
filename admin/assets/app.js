@@ -8,6 +8,8 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
+let privateManifest = '';
+
 
 async function api(path, method = 'GET', value = undefined) {
   const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
@@ -95,6 +97,12 @@ async function refresh(setForm = false) {
 $('sourceLabel').addEventListener('input', updatePreview);
 async function showDashboard() {
   await refresh(true);
+  const manifest = await api('/api/manifest');
+  privateManifest = manifest.url;
+  $('manifestUrl').type = 'password';
+  $('manifestUrl').value = privateManifest;
+  $('manifestReveal').textContent = 'Show';
+  $('manifestStatus').textContent = 'Manifest ready · private addon credential';
   $('secret').value = '';
   $('legacySecret').value = '';
   $('login').hidden = true;
@@ -196,12 +204,39 @@ $('refresh').addEventListener('click', async () => {
   try { await refresh(false); } catch (error) { $('bridgeState').textContent = error.message; }
 });
 
+$('manifestReveal').addEventListener('click', () => {
+  if (!privateManifest) return;
+  const field = $('manifestUrl');
+  field.type = field.type === 'password' ? 'text' : 'password';
+  $('manifestReveal').textContent = field.type === 'password' ? 'Show' : 'Hide';
+});
+
+$('manifestCopy').addEventListener('click', async () => {
+  if (!privateManifest) return;
+  try {
+    await navigator.clipboard.writeText(privateManifest);
+    $('manifestStatus').textContent = 'Copied. Paste directly into AIOStreams Custom Addon.';
+  } catch (_) {
+    const field = $('manifestUrl');
+    field.type = 'text';
+    field.select();
+    const ok = document.execCommand('copy');
+    field.type = 'password';
+    $('manifestReveal').textContent = 'Show';
+    $('manifestStatus').textContent = ok ? 'Copied.' : 'Clipboard denied; select and copy manually.';
+  }
+});
+
 $('logout').addEventListener('click', async () => {
   if (!adminToken && csrfToken) {
     try { await api('/api/auth/logout', 'POST'); } catch (_) {}
   }
   adminToken = '';
   csrfToken = '';
+  privateManifest = '';
+  $('manifestUrl').value = '';
+  $('manifestUrl').type = 'password';
+  $('manifestStatus').textContent = '';
   if (polling) { clearInterval(polling); polling = null; }
   $('main').hidden = true;
   $('login').hidden = false;
