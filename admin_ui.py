@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 
 import app as bridge
 import ops
+import provider_store
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -104,3 +105,50 @@ def settings(payload: dict[str, Any]):
 @console.get("/api/events", dependencies=[Depends(authorize)])
 def events():
     return {"events": ops.events(limit=100)}
+
+
+# Provider entries are intentionally STAGED. They cannot appear in Stremio
+# until the isolated provider-aware playback router passes its own tests.
+@console.get("/api/providers", dependencies=[Depends(authorize)])
+def providers():
+    if not provider_store.installed():
+        return {"key_configured": False, "providers": [],
+                "streaming_activation": False}
+    try:
+        return {"key_configured": True, "providers": provider_store.list_profiles(),
+                "streaming_activation": False}
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider decryption key is unavailable") from None
+
+
+@console.post("/api/providers", dependencies=[Depends(authorize)], status_code=201)
+def provider_add(payload: dict[str, Any]):
+    try:
+        return provider_store.create_profile(payload)
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key is not configured") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@console.patch("/api/providers/{provider_id}", dependencies=[Depends(authorize)])
+def provider_edit(provider_id: str, payload: dict[str, Any]):
+    try:
+        return provider_store.update_profile(provider_id, payload)
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key is not configured") from None
+    except KeyError:
+        raise HTTPException(404, "Provider not found") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@console.delete("/api/providers/{provider_id}", dependencies=[Depends(authorize)])
+def provider_delete(provider_id: str):
+    try:
+        provider_store.delete_profile(provider_id)
+        return {"status": "deleted"}
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key is not configured") from None
+    except KeyError:
+        raise HTTPException(404, "Provider not found") from None
