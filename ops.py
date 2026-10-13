@@ -85,7 +85,7 @@ def serialize(value):
 
 
 def deserialize(key, value):
-    if key == "series_on_demand":
+    if key in ("series_on_demand", "legacy_source_enabled"):
         return value == "1"
     if SCHEMA[key]["type"] == "int":
         return int(value)
