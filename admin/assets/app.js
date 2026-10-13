@@ -8,6 +8,7 @@ const $ = (id) => document.getElementById(id);
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
 let polling = null;
+let refreshInFlight = null;
 
 async function api(path, method = 'GET', value = undefined) {
   const suffix = path.startsWith('/api/') ? path.slice('/api/'.length) : path;
@@ -24,6 +25,14 @@ async function api(path, method = 'GET', value = undefined) {
     },
     ...(value === undefined ? {} : {body: JSON.stringify(value)}),
   });
+  // nginx redirects expired /admin/ sessions to the public sign-in gateway.
+  // A redirected HTML page is not an API success response.
+  if (response.redirected && new URL(response.url).pathname.startsWith('/admin-signin/')) {
+    if (window.location.pathname.startsWith('/admin/')) {
+      window.location.replace('/admin-signin/');
+    }
+    throw new Error('Session expired; opening sign-in.');
+  }
   if (response.status === 401) throw new Error('Please sign in again.');
   if (!response.ok) {
     if (response.status === 422) {
@@ -31,6 +40,9 @@ async function api(path, method = 'GET', value = undefined) {
       throw new Error(String(failure.detail || 'Invalid setting'));
     }
     throw new Error('Service returned HTTP ' + response.status);
+  }
+  if (!(response.headers.get('content-type') || '').toLowerCase().includes('application/json')) {
+    throw new Error('Unexpected API response (expected JSON).');
   }
   return response.json();
 }
@@ -87,9 +99,30 @@ function updatePreview() {
   $('previewName').textContent = ($('sourceLabel').value.trim() || 'IPTV VOD') + ' 2160p';
 }
 
+function refreshFeedback(message, failed = false) {
+  const status = $('refreshStatus');
+  status.hidden = !message;
+  status.textContent = message;
+  status.className = failed ? 'small notice' : 'small muted';
+}
+
 async function refresh(setForm = false) {
-  const data = await api('/api/overview');
-  draw(data, setForm);
+  // Manual clicks and the 15-second poll share the same in-flight read.
+  // Neither path writes to /api/settings or overwrites unsaved form inputs.
+  if (refreshInFlight) {
+    if (!setForm) return refreshInFlight;
+    await refreshInFlight;
+  }
+  const current = api('/api/overview').then(data => {
+    draw(data, setForm);
+    return data;
+  });
+  refreshInFlight = current;
+  try {
+    return await current;
+  } finally {
+    if (refreshInFlight === current) refreshInFlight = null;
+  }
 }
 
 $('sourceLabel').addEventListener('input', updatePreview);
@@ -101,10 +134,16 @@ async function showDashboard() {
   $('main').hidden = false;
   $('refresh').hidden = false;
   $('logout').hidden = false;
+  refreshFeedback('');
   if (polling) clearInterval(polling);
-  polling = setInterval(() => refresh(false).catch(() => {
-    $('bridgeState').textContent = 'Refresh failed';
-  }), 15000);
+  polling = setInterval(() => {
+    if (refreshInFlight) return;
+    refresh(false).catch(error => {
+      $('bridgeState').textContent = 'Stats unavailable';
+      $('bridgeState').className = 'state warn';
+      refreshFeedback('Auto-refresh failed: ' + error.message, true);
+    });
+  }, 15000);
 }
 
 $('loginForm').addEventListener('submit', async (event) => {
@@ -193,7 +232,20 @@ $('settingsForm').addEventListener('submit', async (event) => {
 });
 
 $('refresh').addEventListener('click', async () => {
-  try { await refresh(false); } catch (error) { $('bridgeState').textContent = error.message; }
+  const button = $('refresh');
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = 'Refreshing…';
+  refreshFeedback('Checking latest stats…');
+  try {
+    await refresh(false);
+    refreshFeedback('Refreshed at ' + new Date().toLocaleTimeString());
+  } catch (error) {
+    refreshFeedback('Refresh failed: ' + error.message, true);
+  } finally {
+    button.textContent = 'Refresh stats';
+    button.disabled = false;
+  }
 });
 
 // The nginx session gate protects all /admin/ URLs, including its JSON APIs.
@@ -215,6 +267,7 @@ $('logout').addEventListener('click', async () => {
     $('secret').value = '';
     $('legacySecret').value = '';
     $('sourceLabel').value = '';
+    refreshFeedback('');
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
       return;
