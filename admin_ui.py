@@ -159,6 +159,19 @@ def settings(payload: dict[str, Any]):
     return {"settings": updated}
 
 
+@console.get("/api/manifest", dependencies=[Depends(authorize)])
+def private_manifest_url():
+    # The ADDON_TOKEN is a credential. This endpoint is strictly authenticated
+    # and must not be logged, cached, embedded in HTML or sent to analytics.
+    from urllib.parse import quote
+    if not bridge.PUBLIC.startswith("https://") or not bridge.ADDON_TOKEN:
+        raise HTTPException(503, "Manifest is not configured")
+    return {
+        "url": bridge.PUBLIC + "/a/" + quote(bridge.ADDON_TOKEN, safe="") + "/manifest.json",
+        "types": ["movie", "series"] if not bridge.MOVIES_ONLY else ["movie"],
+    }
+
+
 @console.get("/api/events", dependencies=[Depends(authorize)])
 def events():
     return {"events": ops.events(limit=100)}
