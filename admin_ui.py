@@ -27,6 +27,8 @@ import ops
 import admin_auth
 import admin_users
 import user_sources
+import personal_index
+import personal_manifests
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -468,6 +470,76 @@ async def test_personal_source(source_id: str, identity=Depends(authorize)):
             raise HTTPException(422, "Source connection test failed") from None
         raise
     return {"test": result}
+
+
+@console.post("/api/my/sources/{source_id}/sync")
+async def sync_personal_source(source_id: str, identity=Depends(authorize)):
+    try:
+        return {"sync": await personal_index.sync_owned(identity["username"], source_id)}
+    except KeyError:
+        raise HTTPException(404, "Source not found") from None
+    except RuntimeError:
+        raise HTTPException(503, "Source vault unavailable") from None
+    except ValueError:
+        raise HTTPException(422, "Sync unavailable or rate-limited") from None
+    except Exception:
+        # Never expose upstream exceptions: HTTPX URLs can include credentials.
+        raise HTTPException(502, "Source sync failed") from None
+
+
+@console.get("/api/my/manifests")
+def personal_manifest_list(identity=Depends(authorize)):
+    return {"manifests": personal_manifests.list_owned(identity["username"])}
+
+
+@console.post("/api/my/manifests", status_code=201)
+def personal_manifest_create(payload: dict[str, Any], identity=Depends(authorize)):
+    if set(payload) != {"name", "sources"}:
+        raise HTTPException(422, "Expected name and source IDs")
+    try:
+        return {"manifest": personal_manifests.create(
+            identity["username"], payload["name"], payload["sources"]
+        )}
+    except RuntimeError:
+        raise HTTPException(503, "Manifest service unavailable") from None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid manifest configuration") from None
+
+
+@console.patch("/api/my/manifests/{manifest_id}")
+def personal_manifest_update(manifest_id: str, payload: dict[str, Any],
+                             identity=Depends(authorize)):
+    if not payload or set(payload) - {"name", "enabled", "source_ids"}:
+        raise HTTPException(422, "Invalid manifest update")
+    try:
+        return {"manifest": personal_manifests.update(
+            identity["username"], manifest_id, **payload
+        )}
+    except KeyError:
+        raise HTTPException(404, "Manifest not found") from None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid manifest update") from None
+
+
+@console.post("/api/my/manifests/{manifest_id}/rotate")
+def personal_manifest_rotate(manifest_id: str, identity=Depends(authorize)):
+    try:
+        return {"manifest": personal_manifests.rotate(
+            identity["username"], manifest_id
+        )}
+    except KeyError:
+        raise HTTPException(404, "Manifest not found") from None
+    except RuntimeError:
+        raise HTTPException(503, "Manifest service unavailable") from None
+
+
+@console.delete("/api/my/manifests/{manifest_id}")
+def personal_manifest_delete(manifest_id: str, identity=Depends(authorize)):
+    try:
+        personal_manifests.delete(identity["username"], manifest_id)
+    except KeyError:
+        raise HTTPException(404, "Manifest not found") from None
+    return {"deleted": True}
 
 
 @console.get("/api/system/users")
