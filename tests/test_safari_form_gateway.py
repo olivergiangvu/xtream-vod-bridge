@@ -86,6 +86,48 @@ class SafariFormGatewayTests(unittest.TestCase):
         self.assertNotIn("bad password phrase", bad.text)
         self.assertNotIn(PASSWORD, bad.text)
 
+    def test_safari_native_form_post_missing_origin_with_https_provenance(self):
+        nonce = self.open_form()
+        # Safari native POST may omit Origin and Referer when tracking
+        # protection or Referrer-Policy: no-referrer is in effect.
+        headers = {
+            "Cookie": admin_ui.GATE_LOGIN_COOKIE + "=" + nonce,
+            "Host": "olivergiangvu.asuscomm.com",
+            "X-Forwarded-Proto": "https",
+            "Sec-Fetch-Site": "same-origin",
+        }
+        ok = self.client.post("/gateway/", data={"password": PASSWORD, "nonce": nonce},
+                              headers=headers, follow_redirects=False)
+        self.assertEqual(ok.status_code, 303, ok.text)
+        self.assertIn(admin_auth.COOKIE, ok.cookies)
+
+        # The fallback must NEVER accept an explicit hostile Origin,
+        # cross-site Fetch Metadata, untrusted Host, or an HTTP proxy.
+        bad_headers = (
+            {**headers, "Origin": "https://evil.invalid"},
+            {**headers, "Sec-Fetch-Site": "cross-site"},
+            {**headers, "Host": "attacker.invalid"},
+            {**headers, "X-Forwarded-Proto": "http"},
+            {**headers, "Referer": "https://evil.invalid/hack"},
+        )
+        for altered in bad_headers:
+            r = self.client.post("/gateway/", data={"password": PASSWORD, "nonce": nonce},
+                                 headers=altered, follow_redirects=False)
+            self.assertEqual(r.status_code, 403, altered)
+
+    def test_absent_origin_cannot_skip_independent_nonce(self):
+        nonce = self.open_form()
+        headers = {
+            "Cookie": admin_ui.GATE_LOGIN_COOKIE + "=" + nonce,
+            "Host": "olivergiangvu.asuscomm.com",
+            "X-Forwarded-Proto": "https",
+        }
+        for missing_nonce in ("forged", ""):
+            r = self.client.post("/gateway/",
+                data={"password": PASSWORD, "nonce": missing_nonce},
+                headers=headers, follow_redirects=False)
+            self.assertEqual(r.status_code, 403)
+
     def test_page_reuses_existing_session_and_password_lockout(self):
         nonce = self.open_form()
         logged = self.form_request(nonce)
