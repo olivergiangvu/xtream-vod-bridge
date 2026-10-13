@@ -85,10 +85,11 @@ class ProviderRoutingTests(unittest.IsolatedAsyncioTestCase):
         await self.index_both()
         streams = await router.resolve_streams("movie", "tt1234567", bridge)
         import urllib.parse
-        path = urllib.parse.urlsplit(streams[0]["url"]).path.split("/")
-        # /play/provider/uuid/kind/sid/identity/expiry/mac/name
-        self.assertEqual(path[3], self.a)
-        args = [path[3], path[4], path[5], path[6], path[7], path[8], path[9]]
+        raw_path = urllib.parse.urlsplit(streams[0]["url"]).path
+        # PUBLIC may include an nginx prefix, so split after /play/provider/.
+        path = raw_path.split("/play/provider/", 1)[1].split("/")
+        self.assertEqual(path[0], self.a)
+        args = path[:7]
         self.assertTrue(router.valid_signature(*args, bridge))
         args[0] = self.b
         self.assertFalse(router.valid_signature(*args, bridge))
