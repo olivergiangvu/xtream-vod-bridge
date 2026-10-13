@@ -12,7 +12,7 @@ HomeDocker testing before promotion.
 | Hard-coded `IPTV VOD` brand | Replaced by `source_label`, fallback `STREAM_SOURCE_LABEL` and persisted SQLite override | **Resolved** |
 | On-demand toggle/timeouts/TTL/variant cap/series quota | Non-secret SQLite runtime overrides; validated allowlist/bounds | **Resolved** |
 | Xtream/IMDb/TMDb credentials and API base URLs | Loaded only from `.env`, no default real service credentials | **Keep secrets outside UI** |
-| Public domain / nginx TLS prefix | `PUBLIC_BASE_URL` in `.env`, no literal user domain in app | **Accept** |
+| Public domain / nginx TLS prefix | `PUBLIC_BASE_URL` in `.env`, no literal user domain in app; preflight now accepts both root-port `https://host:18450` and `/xtream-vod` prefix | **Fixed preflight hard-code** |
 | Internal container ports `8767`, `8768`; host defaults `18767`, `18768` | Internal ports are constants shared between Compose, admin app and probes; host ports Compose-substitutable | **Intentional interface constants** |
 | Metadata JIT semaphore of 2 | Fixed in app; prevents burst to unknown Xtream provider | **Security/rate policy, preserve** |
 | `get_series_info` max 8 variants | UI override allowed 1–8 | **Configurable within cap** |
