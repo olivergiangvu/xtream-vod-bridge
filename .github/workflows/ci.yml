@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/v0.5-provider-registry-foundation']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python source
-        run: python -m compileall -q app.py tests
+        run: python -m compileall -q app.py admin_ui.py ops.py provider_store.py scripts tests
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
       - name: Verify sensitive local config is not tracked
