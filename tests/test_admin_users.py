@@ -89,8 +89,8 @@ class MultiUserAdminTests(unittest.TestCase):
     def test_admin_can_edit_settings_and_copy_manifest_but_cannot_create_users(self):
         self.create_account("secondadmin", "admin")
         headers = self.cookie_login("secondadmin", USER_PASSWORD)
-        with patch.object(bridge, "PUBLIC", "https://example.org:18450"), \
-             patch.object(bridge, "ADDON_TOKEN", "S" * 40):
+        with patch.object(admin_ui.bridge, "PUBLIC", "https://example.org:18450"), \
+             patch.object(admin_ui.bridge, "ADDON_TOKEN", "S" * 40):
             endpoint = self.client.get("/api/manifest", headers=headers)
             self.assertEqual(endpoint.status_code, 200)
             self.assertEqual(endpoint.json()["url"],
