@@ -1,6 +1,8 @@
 # Isolated local-only v0.5 canary; never mix with /opt/xtream-vod-bridge.
 # Export CANARY_DIR and CANARY_IMAGE before running docker compose.
-# The bridge's 18769/admin's 18770 are bound on 127.0.0.1 only.
+# Offline Stage 1: private internal Docker network, intentionally NO host published ports.
+# All smoke checks use docker exec into each service.
+# A reviewed loopback-only ingress layer may be added in Stage 2.
 services:
   xtream-vod-bridge:
     image: ${CANARY_IMAGE:?CANARY_IMAGE must be set}
@@ -9,8 +11,6 @@ services:
     restart: "no"
     env_file:
       - ${CANARY_DIR:?CANARY_DIR must be set}/secrets/canary.env
-    ports:
-      - "127.0.0.1:18769:8767"
     volumes:
       - ${CANARY_DIR}/data:/data
     networks:
@@ -39,8 +39,6 @@ services:
     env_file:
       - ${CANARY_DIR:?CANARY_DIR must be set}/secrets/canary.env
     command: ["uvicorn", "admin_ui:console", "--host", "0.0.0.0", "--port", "8768", "--no-access-log"]
-    ports:
-      - "127.0.0.1:18770:8768"
     volumes:
       - ${CANARY_DIR}/data:/data
     networks:
