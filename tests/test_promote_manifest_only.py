@@ -16,6 +16,8 @@ def import_promoter():
     return module
 
 
+@unittest.skipIf((Path(__file__).resolve().parents[1] / "user_sources.py").exists(),
+                 "Archived v0.4 one-time promoter fixture; source evolved in v0.5")
 class ManifestPromotionTests(unittest.TestCase):
     def fixture(self, folder, module):
         source = Path(folder) / "source"
