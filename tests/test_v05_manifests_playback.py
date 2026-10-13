@@ -258,6 +258,73 @@ class V05ScopeTests(unittest.TestCase):
         ))
         self.assertEqual(len(episode["streams"]), 1)
 
+    def test_edit_source_invalidates_old_index_and_signed_playback(self):
+        source = self._source(self.alice)
+        playlist = (
+            b"#EXTM3U\n"
+            b'#EXTINF:-1 imdb-id="tt1234567",Movie\n'
+            b"https://cdn.example.org/film.mp4?token=oldprivate\n"
+        )
+        with patch.object(user_sources, "_bounded_https",
+                          new=AsyncMock(return_value=playlist)):
+            self.assertEqual(self.client.post(
+                f"/api/my/sources/{source}/sync", headers=self.alice
+            ).status_code, 200)
+        manifest = self._manifest(self.alice, [source])
+        token = self._token(manifest["url"])
+        stream = asyncio.run(bridge.streams(
+            token, "movie", "tt1234567"
+        ))["streams"][0]
+        old_args = urlsplit(stream["url"]).path.split("/play/v5/", 1)[1].split("/")
+
+        changed = self.client.patch(
+            f"/api/my/sources/{source}", headers=self.alice,
+            json={"config": {"playlist_url":
+                             "https://new.example.net/playlist.m3u?secret=replaced"}},
+        )
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(
+            asyncio.run(bridge.streams(token, "movie", "tt1234567"))["streams"], []
+        )
+        with self.assertRaises(HTTPException):
+            personal_playback._source_stream(*old_args[:5])
+
+        self.assertEqual(
+            self.client.delete(
+                f"/api/my/sources/{source}", headers=self.alice
+            ).status_code, 200
+        )
+        self.assertEqual(personal_manifests.resolve_token(token)["sources"], [])
+
+    def test_inflight_sync_cannot_republish_old_credential_entries(self):
+        source = self._source(self.alice)
+        playlist = (
+            b"#EXTM3U\n"
+            b'#EXTINF:-1 imdb-id="tt1234567",Movie\n'
+            b"https://cdn.example.org/film.mp4\n"
+        )
+
+        async def change_mid_fetch(*_args, **_kwargs):
+            user_sources.change_owned(
+                "alice", source,
+                config={"playlist_url":
+                        "https://second.example.org/playlist.m3u?token=new"},
+            )
+            return playlist
+
+        with patch.object(user_sources, "_bounded_https",
+                          new=AsyncMock(side_effect=change_mid_fetch)):
+            result = self.client.post(
+                f"/api/my/sources/{source}/sync", headers=self.alice
+            )
+        self.assertEqual(result.status_code, 422, result.text)
+        with ops.database() as con:
+            self.assertEqual(
+                con.execute(
+                    "SELECT COUNT(*) FROM tenant_media WHERE source_id=?", (source,)
+                ).fetchone()[0], 0
+            )
+
     def test_manifest_api_cannot_be_read_without_browser_session(self):
         self.assertEqual(self.client.get("/api/my/manifests").status_code, 401)
         self.assertEqual(
