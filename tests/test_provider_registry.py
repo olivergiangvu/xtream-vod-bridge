@@ -154,6 +154,31 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertIn("staged_not_active", page.text + script) if False else None
         self.assertNotIn(self.form["password"], script)
 
+    def test_import_legacy_idempotent_and_never_leaks_password(self):
+        existing = vault.import_legacy_config(
+            "https://iptv.example.org", "user-from-env", "secret-from-env", "Meteor"
+        )
+        same = vault.import_legacy_config(
+            "https://iptv.example.org", "user-from-env", "secret-from-env", "Meteor"
+        )
+        self.assertEqual(existing["id"], same["id"])
+        self.assertEqual(same["status"], "already_imported")
+        response = self.client.get("/api/providers", headers=self.auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("secret-from-env", response.text)
+        self.assertNotIn(b"secret-from-env", self.database.read_bytes())
+        with ops.database() as con:
+            self.assertEqual(con.execute("SELECT COUNT(*) FROM provider_profiles").fetchone()[0], 1)
+        self.assertFalse(vault.list_profiles()[0]["enabled"])
+
+    def test_insecure_key_permissions_fails_closed(self):
+        os.chmod(self.key_file, 0o644)
+        try:
+            r = self.client.post("/api/providers", headers=self.auth, json=self.form)
+            self.assertEqual(r.status_code, 503)
+        finally:
+            os.chmod(self.key_file, 0o600)
+
     def test_deletion_has_no_legacy_index_side_effects(self):
         # Legacy table belongs to stable v0.4 and must survive independent provider deletion.
         with ops.database() as con:
