@@ -113,6 +113,47 @@ class SafariFormGatewayTests(unittest.TestCase):
         self.assertTrue(dashboard_session.json()["authenticated"])
         self.assertTrue(dashboard_session.json()["csrf_token"])
 
+    def test_lock_revokes_gateway_session_before_redirect(self):
+        # Server-side revocation must be real; a UI-only hide is not Lock.
+        nonce = self.open_form()
+        logged = self.form_request(nonce)
+        session = logged.cookies.get(admin_auth.COOKIE)
+        cookie = {"Cookie": admin_auth.COOKIE + "=" + session}
+        status = self.client.get("/api/auth/session", headers=cookie).json()
+        self.assertTrue(status["authenticated"])
+
+        denied = self.client.post("/api/auth/logout", headers=cookie)
+        self.assertEqual(denied.status_code, 403)
+
+        logout = self.client.post(
+            "/api/auth/logout", headers={
+                **cookie,
+                "Origin": ORIGIN,
+                "X-CSRF-Token": status["csrf_token"],
+            },
+        )
+        self.assertEqual(logout.status_code, 200)
+        self.assertIs(logout.json()["authenticated"], False)
+        self.assertEqual(
+            self.client.get("/api/auth/gate-check", headers=cookie).status_code,
+            401,
+        )
+
+    def test_admin_lock_js_uses_single_public_gateway(self):
+        js = (Path(__file__).resolve().parents[1] /
+              "admin/assets/app.js").read_text()
+        click = js.split("$('logout').addEventListener('click', async () => {", 1)[1]
+        self.assertIn("api('/api/auth/logout', 'POST')", click)
+        self.assertIn("result.authenticated !== false", click)
+        self.assertIn("window.location.replace('/admin-signin/')", click)
+        self.assertLess(
+            click.index("result.authenticated !== false"),
+            click.index("window.location.replace('/admin-signin/')"),
+        )
+        # The direct loopback/SSH UI retains its legacy form.
+        self.assertIn("window.location.pathname.startsWith('/admin/')", click)
+        self.assertIn("Lock failed:", click)
+
     def test_login_rejects_forged_origin_nonce_and_password(self):
         nonce = self.open_form()
         self.assertEqual(self.form_request(nonce, origin="https://evil.invalid").status_code, 403)
