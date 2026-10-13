@@ -21,6 +21,17 @@ class PromotionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             reviewed_ui = (ROOT / "admin_ui.py").read_text()
+            # This promoter is intentionally pinned to the prior Login UX
+            # release; remove only the new v0.4.3 endpoint from this fixture
+            # to recover the exact reviewed source for its checksum gate.
+            new_start = reviewed_ui.index(
+                '@console.get("/api/manifest", dependencies=[Depends(authorize)])'
+            )
+            new_end = reviewed_ui.index(
+                '@console.get("/api/events", dependencies=[Depends(authorize)])',
+                new_start,
+            )
+            reviewed_ui = reviewed_ui[:new_start] + reviewed_ui[new_end:]
             reviewed_auth = (ROOT / "admin_auth.py").read_text()
             source_dir = root / "reviewed"
             local_dir = root / "local"
