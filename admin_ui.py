@@ -19,6 +19,8 @@ from fastapi.staticfiles import StaticFiles
 import app as bridge
 import ops
 import provider_store
+import provider_router
+from urllib.parse import urlencode
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -116,7 +118,7 @@ def providers():
                 "streaming_activation": False}
     try:
         return {"key_configured": True, "providers": provider_store.list_profiles(),
-                "streaming_activation": False}
+                "streaming_activation": provider_router.ENABLED}
     except provider_store.RegistryUnavailable:
         raise HTTPException(503, "Provider decryption key is unavailable") from None
 
@@ -152,3 +154,45 @@ def provider_delete(provider_id: str):
         raise HTTPException(503, "Provider encryption key is not configured") from None
     except KeyError:
         raise HTTPException(404, "Provider not found") from None
+
+
+
+@console.post("/api/providers/{provider_id}/sync", dependencies=[Depends(authorize)])
+def provider_index_now(provider_id: str):
+    if not provider_router.ENABLED:
+        raise HTTPException(409, "Multi-provider router is disabled")
+    if not provider_store.installed():
+        raise HTTPException(503, "Provider encryption key is unavailable")
+    # Cross-check existence before calling the internal API.
+    try:
+        provider_store.get_credentials(provider_id)
+    except KeyError:
+        raise HTTPException(404, "Provider not found") from None
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key is unavailable") from None
+    url = "http://xtream-vod-bridge:8767/admin/providers/sync?" + urlencode(
+        {"provider_id": provider_id}
+    )
+    req = urllib.request.Request(url, method="POST",
+                                 headers={"X-Admin-Token": bridge.ADMIN_TOKEN})
+    try:
+        with urllib.request.urlopen(req, timeout=45) as response:
+            return json.loads(response.read(8192))
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        raise HTTPException(502, "Provider index unavailable") from None
+
+
+@console.post("/api/providers/{provider_id}/activation", dependencies=[Depends(authorize)])
+def provider_activation(provider_id: str, payload: dict[str, Any]):
+    if not provider_router.ENABLED:
+        raise HTTPException(409, "Multi-provider router is disabled")
+    if set(payload) != {"enabled"}:
+        raise HTTPException(422, "Expected enabled boolean")
+    try:
+        return provider_store.set_active(provider_id, payload["enabled"])
+    except KeyError:
+        raise HTTPException(404, "Provider not found") from None
+    except provider_store.RegistryUnavailable:
+        raise HTTPException(503, "Provider encryption key is unavailable") from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
