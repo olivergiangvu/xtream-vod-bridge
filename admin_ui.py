@@ -8,6 +8,7 @@ Secrets never appear in API responses, URLs, browser storage, or server logs.
 """
 import hmac
 import json
+import socket
 import secrets
 from urllib.parse import parse_qs
 from html import escape
@@ -24,6 +25,8 @@ from fastapi.staticfiles import StaticFiles
 import app as bridge
 import ops
 import admin_auth
+import admin_users
+import user_sources
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -33,6 +36,8 @@ BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
 async def lifespan(_app):
     ops.init()
     admin_auth.init()
+    admin_users.init()
+    user_sources.init()
     yield
 
 
@@ -74,7 +79,7 @@ def authorize(request: Request, authorization: str = Header(default="")):
     # uses a separate password-verified HttpOnly session.
     token = authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
     if bridge.ADMIN_TOKEN and hmac.compare_digest(token, bridge.ADMIN_TOKEN):
-        return
+        return {"username": "owner", "role": "admin"}
     session = admin_auth.session_info(request.cookies.get(admin_auth.COOKIE))
     if session:
         if request.method in ("PUT", "POST", "PATCH", "DELETE"):
@@ -83,7 +88,7 @@ def authorize(request: Request, authorization: str = Header(default="")):
                 csrf, session["csrf"]
             ):
                 raise HTTPException(status_code=403, detail="CSRF validation failed")
-        return
+        return {"username": session["username"], "role": session["role"]}
     raise HTTPException(status_code=401, detail="Unauthorized",
                         headers={"WWW-Authenticate": "Bearer"})
 
@@ -93,6 +98,12 @@ def authorize(request: Request, authorization: str = Header(default="")):
 # the nginx auth_request gate AND the FastAPI Admin session. Gateway pages
 # MUST be exposed only at /admin-signin/ through the reviewed nginx route.
 # /api/auth/gate-check MUST remain nginx-internal, NEVER directly public.
+def require_admin(identity=Depends(authorize)):
+    if identity["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin permission required")
+    return identity
+
+
 GATE_LOGIN_COOKIE = "xtream_admin_login_nonce"
 
 
@@ -288,6 +299,8 @@ def auth_status(request: Request):
         "authenticated": bool(session),
         "csrf_token": session["csrf"] if session else None,
         "password_ready": admin_auth.configured() and admin_auth.origin_configured(),
+        "username": session["username"] if session else None,
+        "role": session["role"] if session else None,
     }
 
 
@@ -312,7 +325,8 @@ def auth_login(request: Request, response: Response, payload: dict[str, Any]):
         path=admin_auth.COOKIE_PATH,
         max_age=admin_auth.SESSION_SECONDS,
     )
-    return {"authenticated": True, "csrf_token": csrf, "expires_in": admin_auth.SESSION_SECONDS}
+    return {"authenticated": True, "csrf_token": csrf, "expires_in": admin_auth.SESSION_SECONDS,
+            "username": payload.get("username", "owner")}
 
 
 @console.post("/api/auth/logout", dependencies=[Depends(authorize)])
@@ -322,7 +336,7 @@ def auth_logout(request: Request, response: Response):
     return {"authenticated": False}
 
 
-@console.get("/api/overview", dependencies=[Depends(authorize)])
+@console.get("/api/overview", dependencies=[Depends(require_admin)])
 def overview():
     status = main_health()
     return {
@@ -342,7 +356,7 @@ def overview():
     }
 
 
-@console.put("/api/settings", dependencies=[Depends(authorize)])
+@console.put("/api/settings", dependencies=[Depends(require_admin)])
 def settings(payload: dict[str, Any]):
     try:
         updated = ops.update(payload)
@@ -351,7 +365,7 @@ def settings(payload: dict[str, Any]):
     return {"settings": updated}
 
 
-@console.get("/api/manifest", dependencies=[Depends(authorize)])
+@console.get("/api/manifest", dependencies=[Depends(require_admin)])
 def private_manifest_url():
     """Return the configured addon manifest URL only to authenticated Admins.
 
@@ -375,6 +389,127 @@ def private_manifest_url():
     }
 
 
-@console.get("/api/events", dependencies=[Depends(authorize)])
+# v0.5a source/configuration endpoints. The existing single-provider
+# /a/ and /play/ routes remain unchanged until the scoped playback stage.
+
+
+@console.get("/api/my/overview")
+def personal_overview(identity=Depends(authorize)):
+    return {
+        "username": identity["username"],
+        "role": identity["role"],
+        "sources": user_sources.list_owned(identity["username"]),
+        "manifest_ready": False,  # v0.5c, not yet exposed to clients
+    }
+
+
+@console.get("/api/my/sources")
+def personal_sources(identity=Depends(authorize)):
+    return {"sources": user_sources.list_owned(identity["username"])}
+
+
+@console.post("/api/my/sources", status_code=201)
+def create_personal_source(payload: dict[str, Any], identity=Depends(authorize)):
+    if set(payload) != {"kind", "name", "config"}:
+        raise HTTPException(422, "Expected kind, name and config")
+    try:
+        source = user_sources.add_source(
+            identity["username"], payload["kind"], payload["name"], payload["config"]
+        )
+    except RuntimeError:
+        raise HTTPException(503, "Source vault unavailable") from None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid source configuration") from None
+    return {"source": source}
+
+
+@console.patch("/api/my/sources/{source_id}")
+def update_personal_source(source_id: str, payload: dict[str, Any],
+                           identity=Depends(authorize)):
+    if not payload or set(payload) - {"name", "enabled", "config"}:
+        raise HTTPException(422, "Invalid source update")
+    try:
+        source = user_sources.change_owned(identity["username"], source_id, **payload)
+    except KeyError:
+        raise HTTPException(404, "Source not found") from None
+    except RuntimeError:
+        raise HTTPException(503, "Source vault unavailable") from None
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Invalid source configuration") from None
+    return {"source": source}
+
+
+@console.delete("/api/my/sources/{source_id}")
+def delete_personal_source(source_id: str, identity=Depends(authorize)):
+    try:
+        user_sources.remove_owned(identity["username"], source_id)
+    except KeyError:
+        raise HTTPException(404, "Source not found") from None
+    return {"deleted": True}
+
+
+@console.post("/api/my/sources/{source_id}/test")
+async def test_personal_source(source_id: str, identity=Depends(authorize)):
+    try:
+        result = await user_sources.test_owned(identity["username"], source_id)
+    except KeyError:
+        raise HTTPException(404, "Source not found") from None
+    except RuntimeError:
+        raise HTTPException(503, "Source vault unavailable") from None
+    except (ValueError, OSError, TimeoutError):
+        raise HTTPException(422, "Source connection test failed") from None
+    except Exception as exc:
+        # Never expose URL, credentials or upstream error detail in responses.
+        # HTTPX may include the password-bearing URL in its exception string.
+        if isinstance(exc, (urllib.error.URLError,)):
+            raise HTTPException(422, "Source connection test failed") from None
+        import httpx
+        if isinstance(exc, (httpx.HTTPError, socket.gaierror)):
+            raise HTTPException(422, "Source connection test failed") from None
+        raise
+    return {"test": result}
+
+
+@console.get("/api/system/users")
+def system_users(identity=Depends(require_admin)):
+    return {"users": admin_users.list_users()}
+
+
+@console.post("/api/system/users", status_code=201)
+def system_create_user(payload: dict[str, Any],
+                       identity=Depends(require_admin)):
+    if set(payload) != {"username", "password"}:
+        raise HTTPException(422, "Expected username and password")
+    try:
+        return {"user": admin_users.create_user(payload["username"], payload["password"])}
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid user configuration") from None
+
+
+@console.patch("/api/system/users/{username}")
+def system_update_user(username: str, payload: dict[str, Any],
+                       identity=Depends(require_admin)):
+    if not payload or set(payload) - {"enabled", "password"}:
+        raise HTTPException(422, "Invalid account changes")
+    try:
+        return {"user": admin_users.change_user(username, **payload)}
+    except KeyError:
+        raise HTTPException(404, "User not found") from None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid account changes") from None
+
+
+@console.delete("/api/system/users/{username}")
+def system_delete_user(username: str, identity=Depends(require_admin)):
+    try:
+        admin_users.delete_user(username)
+    except KeyError:
+        raise HTTPException(404, "User not found") from None
+    except ValueError:
+        raise HTTPException(422, "Delete personal sources first; owner is protected") from None
+    return {"deleted": True}
+
+
+@console.get("/api/events", dependencies=[Depends(require_admin)])
 def events():
     return {"events": ops.events(limit=100)}
