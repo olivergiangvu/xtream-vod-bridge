@@ -102,6 +102,18 @@ class AdminPrefixTests(unittest.TestCase):
         self.assertNotRegex(active, r"location[^\n]+/(?:play|a)/")
         self.assertNotIn("proxy_pass http://127.0.0.1:18767", active)
 
+    def test_main_and_admin_compose_image_tags_are_identical(self):
+        compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+        main = compose.split("  xtream-vod-bridge:", 1)[1].split("  xtream-vod-admin:", 1)[0]
+        admin = compose.split("  xtream-vod-admin:", 1)[1].split("\\nvolumes:", 1)[0]
+        import re
+        main_image = re.search(r"^    image: ([^\\n]+)$", main, re.MULTILINE)
+        admin_image = re.search(r"^    image: ([^\\n]+)$", admin, re.MULTILINE)
+        self.assertIsNotNone(main_image)
+        self.assertIsNotNone(admin_image)
+        self.assertEqual(main_image.group(1), admin_image.group(1))
+        self.assertEqual(main_image.group(1), "homedocker/xtream-vod-bridge:0.4.1")
+
     def test_prefix_ui_does_not_include_sensitive_tokens(self):
         html = self.client.get("/")
         self.assertEqual(html.status_code, 200)
