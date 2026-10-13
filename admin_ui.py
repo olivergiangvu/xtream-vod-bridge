@@ -1,6 +1,8 @@
-"""Private admin control-plane: separate Docker port, never proxied publicly.
+"""Private admin control-plane with LAN-restricted HTTPS reverse-proxy option.
 
-Accessible only via SSH tunnel to 127.0.0.1:18768 on the HomeDocker host.
+Backend stays bound to 127.0.0.1:18768 on the HomeDocker host.
+A narrowly scoped nginx /admin/ route on the existing 18450 listener may
+allow only verified LAN clients; the backend port stays off router NAT.
 Every API call requires the independent ADMIN_TOKEN in an Authorization header.
 Secrets never appear in API responses, URLs, browser storage, or server logs.
 """
