@@ -148,17 +148,21 @@ def login(password):
                 "locked_until=excluded.locked_until",
                 (attempts, window_start, locked_until),
             )
-            raise ValueError("Invalid credentials")
-        con.execute("DELETE FROM admin_login_guard")
-        session = secrets.token_urlsafe(36)
-        csrf = secrets.token_urlsafe(32)
-        digest = hashlib.sha256(session.encode()).hexdigest()
-        con.execute("DELETE FROM admin_sessions WHERE expires_at <= ?", (now,))
-        con.execute(
-            "INSERT INTO admin_sessions(session_digest,csrf,expires_at,created_at) "
-            "VALUES(?,?,?,?)",
-            (digest, csrf, now + SESSION_SECONDS, now),
-        )
+            # Do NOT throw while inside the transaction: it would roll back
+            # the failed-attempt counter, silently disabling lockout.
+        else:
+            con.execute("DELETE FROM admin_login_guard")
+            session = secrets.token_urlsafe(36)
+            csrf = secrets.token_urlsafe(32)
+            digest = hashlib.sha256(session.encode()).hexdigest()
+            con.execute("DELETE FROM admin_sessions WHERE expires_at <= ?", (now,))
+            con.execute(
+                "INSERT INTO admin_sessions(session_digest,csrf,expires_at,created_at) "
+                "VALUES(?,?,?,?)",
+                (digest, csrf, now + SESSION_SECONDS, now),
+            )
+    if not good:
+        raise ValueError("Invalid credentials")
     return session, csrf
 
 
