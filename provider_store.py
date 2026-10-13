@@ -65,6 +65,10 @@ def init():
                 updated_at INTEGER NOT NULL
             )
         """)
+        cols = {r["name"] for r in con.execute("PRAGMA table_info(provider_profiles)")}
+        if "credential_revision" not in cols:
+            con.execute("ALTER TABLE provider_profiles ADD COLUMN "
+                        "credential_revision INTEGER NOT NULL DEFAULT 0")
         con.execute("CREATE INDEX IF NOT EXISTS provider_priority_idx "
                     "ON provider_profiles(enabled, priority, provider_id)")
         # Additive schema only. Legacy index.sqlite, items and episodes
