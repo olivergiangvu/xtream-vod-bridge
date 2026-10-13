@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Xtream VOD Bridge · HomeDocker</title>
-  <link rel="stylesheet" href="/assets/style.css">
-  <script src="/assets/app.js" defer></script>
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/app.js" defer></script>
 </head>
 <body>
   <div class="shell">
@@ -17,10 +17,10 @@
     <section id="login" class="login-panel">
       <div class="eyebrow">LOCAL ADMIN</div>
       <h1>Connect to your bridge</h1>
-      <p>This console is reachable only through the SSH tunnel. Enter your existing <code>ADMIN_TOKEN</code>. It is kept in memory and is never stored in the browser.</p>
+      <p>This console is available through a trusted LAN HTTPS proxy or an SSH tunnel. Enter your existing <code>ADMIN_TOKEN</code>. It is kept in memory and is never stored in the browser.</p>
       <form id="loginForm" autocomplete="off"><label for="secret">Admin token</label><input id="secret" type="password" autocomplete="off" spellcheck="false" required placeholder="Paste your admin token"><button type="submit" class="primary">Unlock dashboard</button></form>
       <p id="loginError" class="notice" role="alert"></p>
-      <p class="hint">Never forward port 18768 to the Internet or add it to public nginx.</p>
+      <p class="hint">Never forward port 18768. The /admin/ route on port 18450 must be LAN-restricted and HTTPS-only.</p>
     </section>
     <main id="main" hidden>
       <div class="section-heading"><div><div class="eyebrow">OVERVIEW</div><h1>Operations at a glance</h1></div><span id="lastCheck" class="muted small"></span></div>
@@ -63,7 +63,7 @@
           <section class="panel"><div class="panel-header"><div><div class="eyebrow">DIAGNOSTICS</div><h2>Recent events</h2></div><span class="small muted">Last 40</span></div><div class="events-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Status</th><th>ms / #</th></tr></thead><tbody id="events"><tr><td colspan="4" class="muted">No events yet</td></tr></tbody></table></div><p class="small muted">Redacted logs contain only event type, status, duration and stream count. Never provider URLs, logins or tokens.</p></section>
         </div>
       </div>
-      <footer class="muted small">Local-only console · Separate Docker admin port · Settings stored in existing SQLite volume · Signed playback unchanged</footer>
+      <footer class="muted small">LAN-restricted HTTPS or SSH console · Separate Docker admin port · Settings stored in existing SQLite volume · Signed playback unchanged</footer>
     </main>
   </div>
 </body>
