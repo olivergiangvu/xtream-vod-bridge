@@ -28,5 +28,18 @@ class CanaryIsolation(unittest.TestCase):
                 bootstrap.assert_not_awaited()
 
 
+    def test_offline_compose_does_not_publish_ports(self):
+        root = Path(__file__).resolve().parents[1]
+        compose = (root / "canary/compose.yaml").read_text()
+        bootstrap = (root / "canary/bootstrap_homedocker.sh").read_text()
+        self.assertIn("internal: true", compose)
+        self.assertNotIn("ports:", compose)
+        self.assertNotIn("127.0.0.1:18769", bootstrap)
+        self.assertNotIn("127.0.0.1:18770", bootstrap)
+        self.assertIn("docker exec xtream-vod-canary-playback", bootstrap)
+        self.assertIn("docker exec xtream-vod-canary-admin", bootstrap)
+        self.assertIn("CANARY_HTTP_SMOKE=PASS", bootstrap)
+
+
 if __name__ == "__main__":
     unittest.main()
