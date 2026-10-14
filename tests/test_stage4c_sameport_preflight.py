@@ -58,6 +58,25 @@ class SamePortPreflightTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         preflight.find_server_config(sample)
 
+    def test_route_mismatch_lists_safe_check_ids_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "test-vhost.conf"
+            vhost = (
+                "server {\n"
+                " listen 18450 ssl;\n"
+                " server_name olivergiangvu.asuscomm.com;\n"
+                " location / { return 404; }\n"
+                "}\n"
+            )
+            path.write_text(vhost)
+            dump = f"# configuration file {path}:\n" + vhost
+            with patch.object(Path, "is_relative_to", return_value=True):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "admin_location,signin_location,auth_request_gate"
+                ):
+                    preflight.find_server_config(dump)
+
     def test_marker_and_comment_parser_preserve_quote(self):
         self.assertEqual(
             preflight.no_comments('  listen 18450 ssl; # comment'),
