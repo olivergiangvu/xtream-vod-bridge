@@ -121,8 +121,8 @@ class SamePortPreflightTests(unittest.TestCase):
         with patch.object(preflight.ssl, "create_default_context", return_value=context):
             with patch.object(preflight.socket, "create_connection", return_value=dialed) as dial:
                 with patch.object(preflight.http.client, "HTTPResponse", return_value=reply):
-                    self.assertTrue(preflight.verify_public_signin_https())
-        dial.assert_called_once_with(("127.0.0.1", 18450), timeout=8)
+                    self.assertTrue(preflight.verify_public_signin_https("192.168.50.10"))
+        dial.assert_called_once_with(("192.168.50.10", 18450), timeout=8)
         self.assertEqual(
             context.wrap_socket.call_args.kwargs["server_hostname"],
             "olivergiangvu.asuscomm.com",
@@ -151,12 +151,12 @@ class SamePortPreflightTests(unittest.TestCase):
             with patch.object(preflight.socket, "create_connection", return_value=dialed):
                 with patch.object(preflight.http.client, "HTTPResponse", return_value=reply):
                     with self.assertRaisesRegex(ValueError, "does not match secure Gateway"):
-                        preflight.verify_public_signin_https()
+                        preflight.verify_public_signin_https("192.168.50.10")
         with patch.object(preflight.ssl, "create_default_context", return_value=context):
             with patch.object(preflight.socket, "create_connection",
                               side_effect=OSError("synthetic dial failure")):
                 with self.assertRaisesRegex(ValueError, "HTTPS probe failed"):
-                    preflight.verify_public_signin_https()
+                    preflight.verify_public_signin_https("192.168.50.10")
 
     def test_marker_and_comment_parser_preserve_quote(self):
         self.assertEqual(
