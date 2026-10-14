@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="/opt/xtream-vod-canary"
 BASE_COMPOSE="$ROOT/src/canary/compose.yaml"
-UI_SHA="d0014c1cd68c8fd1e591d4e02a8fc5b2ce11b7d2"
+UI_SHA="d5375d8ae60289d5129898eb34d05afdf4f9ce36"
 BASE_IMAGE="homedocker/xtream-vod-canary:5c2f02233a0f"
 UI_IMAGE="homedocker/xtream-vod-canary-admin:0.5d-$(printf '%.12s' "$UI_SHA")"
 UI_ROOT="$ROOT/ui-release-$(printf '%.12s' "$UI_SHA")"
@@ -33,7 +33,7 @@ for FILE in admin/index.html admin/assets/app.js admin/assets/workspace.js admin
   mkdir -p "$TMP/$(dirname "$FILE")"
   curl -fsSL --retry 3 --max-time 30 "$URL/$FILE" -o "$TMP/$FILE"
   case "$FILE" in
-    admin/index.html) EXPECTED="00f1430f93d9df68c0c0fb5786db8a4a62a642ce";;
+    admin/index.html) EXPECTED="8c28f47900ec22d29c2135bb2cd34266f1d81a9c";;
     admin/assets/app.js) EXPECTED="c23cdade73cfe181bfc3d323f5fa313e5711a83c";;
     admin/assets/workspace.js) EXPECTED="10b8307113004d32b7987a99f62e4490a03a6caa";;
     admin/assets/style.css) EXPECTED="bde37ed6830d6551243869c0d1d0f19c76ae372c";;
