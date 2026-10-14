@@ -18,7 +18,8 @@ SOURCE = (
 )
 TEMPLATE = (
     "# review-only\n"
-    "location = /__xtream_canary_admin_gate_check { internal; }\n"
+    "location = /__xtream_canary_admin_gate_check { internal;"
+    " proxy_pass http://__CANARY_ADMIN_IP__:8768/api/auth/gate-check; }\n"
     "location ^~ /canary/admin/ { allow __CANARY_LAN_CIDR__; deny all;"
     " auth_request /__xtream_canary_admin_gate_check;"
     " proxy_pass http://__CANARY_ADMIN_IP__:8768/; }\n"
