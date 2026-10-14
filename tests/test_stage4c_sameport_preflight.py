@@ -101,62 +101,55 @@ class SamePortPreflightTests(unittest.TestCase):
             self.assertIn("admin-gateway.conf", block)
             self.assertNotIn("location ^~ /admin-signin/", block)
 
-    def test_https_sni_probe_uses_existing_port_and_validates_nonce(self):
-        from unittest.mock import MagicMock
-        context = MagicMock()
-        dialed = MagicMock()
-        tls = MagicMock()
-        reply = MagicMock()
-        context.wrap_socket.return_value.__enter__.return_value = tls
-        dialed.__enter__.return_value = MagicMock()
-        reply.status = 200
-        reply.getheader.return_value = "text/html; charset=utf-8"
-        reply.getheaders.return_value = [
-            ("Set-Cookie", "xtream_admin_login_nonce=synthetic; Path=/admin-signin/; HttpOnly; Secure")
-        ]
-        reply.read.return_value = (
-            b'<form action="/admin-signin/" method="post">'
-            b'<input type="hidden" name="nonce" value="synthetic"></form>'
+    def test_https_sni_probe_uses_curl_verified_tls_and_fixed_domain(self):
+        from types import SimpleNamespace
+        html = (
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: text/html; charset=utf-8\r\n"
+            "Set-Cookie: xtream_admin_login_nonce=synthetic; Path=/admin-signin/; Secure; HttpOnly\r\n"
+            "\r\n"
+            '<form method="post" action="/admin-signin/">'
+            '<input name="nonce" value="synthetic" type="hidden"></form>'
         )
-        with patch.object(preflight.ssl, "create_default_context", return_value=context):
-            with patch.object(preflight.socket, "create_connection", return_value=dialed) as dial:
-                with patch.object(preflight.http.client, "HTTPResponse", return_value=reply):
-                    self.assertTrue(preflight.verify_public_signin_https("192.168.50.10"))
-        dial.assert_called_once_with(("192.168.50.10", 18450), timeout=8)
-        self.assertEqual(
-            context.wrap_socket.call_args.kwargs["server_hostname"],
-            "olivergiangvu.asuscomm.com",
-        )
-        request = tls.sendall.call_args.args[0]
-        self.assertTrue(request.startswith(b"GET /admin-signin/ HTTP/1.1\r\n"))
+        with patch.object(preflight.subprocess, "run", return_value=SimpleNamespace(
+            returncode=0, stdout=html, stderr=""
+        )) as invoked:
+            self.assertTrue(preflight.verify_public_signin_https("192.168.50.10"))
+        args = invoked.call_args.args[0]
+        self.assertEqual(args[0], "curl")
+        self.assertIn("--resolve", args)
         self.assertIn(
-            b"Host: olivergiangvu.asuscomm.com:18450\r\n",
-            request,
+            "olivergiangvu.asuscomm.com:18450:192.168.50.10",
+            args,
         )
-        self.assertIn(b"\r\n\r\n", request)
-        self.assertNotIn(b"password", request.lower())
+        self.assertIn("--noproxy", args)
+        self.assertIn("--http1.1", args)
+        self.assertIn("https://olivergiangvu.asuscomm.com:18450/admin-signin/", args)
+        self.assertNotIn("--insecure", args)
+        self.assertNotIn("-k", args)
+        self.assertNotIn("--location", args)
+        self.assertTrue(invoked.call_args.kwargs["capture_output"])
+        self.assertLessEqual(invoked.call_args.kwargs["timeout"], 20)
 
-    def test_https_signin_failure_refuses_unknown_login_routes(self):
-        from unittest.mock import MagicMock
-        context = MagicMock()
-        dialed = MagicMock()
-        tls = MagicMock()
-        reply = MagicMock()
-        context.wrap_socket.return_value.__enter__.return_value = tls
-        reply.status = 302
-        reply.getheader.return_value = "text/html"
-        reply.getheaders.return_value = []
-        reply.read.return_value = b"wrong login route"
-        with patch.object(preflight.ssl, "create_default_context", return_value=context):
-            with patch.object(preflight.socket, "create_connection", return_value=dialed):
-                with patch.object(preflight.http.client, "HTTPResponse", return_value=reply):
-                    with self.assertRaisesRegex(ValueError, "does not match secure Gateway"):
+    def test_https_signin_fail_closed_bad_response_or_tls(self):
+        from types import SimpleNamespace
+        cases = [
+            (0, "HTTP/1.1 302 Found\r\n\r\n"),
+            (0, "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\nMissing nonce"),
+            (60, ""),
+        ]
+        for code, output in cases:
+            with self.subTest(code=code, response=output[:25]):
+                with patch.object(preflight.subprocess, "run", return_value=SimpleNamespace(
+                    returncode=code, stdout=output, stderr="sensitive synthetic error"
+                )):
+                    with self.assertRaises(ValueError) as caught:
                         preflight.verify_public_signin_https("192.168.50.10")
-        with patch.object(preflight.ssl, "create_default_context", return_value=context):
-            with patch.object(preflight.socket, "create_connection",
-                              side_effect=OSError("synthetic dial failure")):
-                with self.assertRaisesRegex(ValueError, "HTTPS probe failed"):
-                    preflight.verify_public_signin_https("192.168.50.10")
+                    self.assertNotIn("sensitive synthetic error", str(caught.exception))
+        with patch.object(preflight.subprocess, "run") as invoked:
+            with self.assertRaisesRegex(ValueError, "private IPv4"):
+                preflight.verify_public_signin_https("8.8.8.8")
+            invoked.assert_not_called()
 
     def test_marker_and_comment_parser_preserve_quote(self):
         self.assertEqual(
