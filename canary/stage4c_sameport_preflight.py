@@ -168,7 +168,7 @@ def find_server_config(dump):
     return filename, resolved, block
 
 
-def verify_public_signin_https():
+def verify_public_signin_https(bind_ip):
     """Prove production login works on the exact existing TLS/SNI vhost.
 
     nginx -T separates included physical files, so an otherwise working
@@ -177,7 +177,7 @@ def verify_public_signin_https():
     """
     context = ssl.create_default_context()
     try:
-        with socket.create_connection(("127.0.0.1", 18450), timeout=8) as tcp:
+        with socket.create_connection((bind_ip, 18450), timeout=8) as tcp:
             with context.wrap_socket(tcp, server_hostname=DOMAIN) as tls:
                 tls.settimeout(8)
                 request = (
@@ -240,10 +240,6 @@ def main():
         raise ValueError("Current production nginx config does not pass nginx -t")
     raw = command("nginx", "-T")
     filename, resolved, _block = find_server_config(raw)
-    # A physical include can define /admin-signin/ outside the source text
-    # of the vhost; verify the live authenticated HTTPS sign-in response.
-    verify_public_signin_https()
-
     admin_ip, admin_image = container_ip("xtream-vod-canary-admin")
     play_ip, play_image = container_ip("xtream-vod-canary-playback")
     if admin_image not in EXPECTED_ADMIN_IMAGES or play_image != EXPECTED_PLAY_IMAGE:
@@ -262,6 +258,11 @@ def main():
         raise ValueError("LAN subnet is too broad for Canary access policy")
     if ipaddress.ip_address(lan_ip) not in net:
         raise ValueError("HomeDocker LAN IP does not match subnet")
+
+    # Use the HomeDocker LAN bind address, not loopback. Existing nginx
+    # /admin-signin/ ACLs may intentionally allow LAN while denying 127.0.0.1.
+    # TLS SNI and Host still target the exact production public hostname.
+    verify_public_signin_https(lan_ip)
 
     check_http(admin_ip, 8768, "/", 200)
     check_http(admin_ip, 8768, "/api/my/sources", 401)
