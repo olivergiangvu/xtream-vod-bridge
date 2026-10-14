@@ -4,6 +4,12 @@ let csrfToken = ''; // Random per-session CSRF value; held in JS memory only.
 // Relative to this document: /admin/ -> /admin/api/; direct / -> /api/.
 // Do not route admin API requests to the public addon /api/ root on 18450.
 const adminApiRoot = new URL('api/', document.baseURI);
+// Preserve a single HTTPS :18450. Both /admin/ and /canary/admin/ work
+// because the gateway and API share the parent path of this document.
+const adminPagePath = new URL('.', document.baseURI).pathname;
+const signinPagePath = new URL('../admin-signin/', document.baseURI).pathname;
+const isProxiedAdminPage = () => adminPagePath !== '/' &&
+  window.location.pathname.startsWith(adminPagePath);
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (typeof n === 'number' ? n.toLocaleString('en-US') : '—');
 const asInt = (id) => Number.parseInt($(id).value, 10);
@@ -29,11 +35,11 @@ async function api(path, method = 'GET', value = undefined) {
   });
   // nginx redirects expired /admin/ sessions to the public sign-in gateway.
   // A redirected HTML page is not an API success response.
-  if (response.redirected && new URL(response.url).pathname.startsWith('/admin-signin/')) {
+  if (response.redirected && new URL(response.url).pathname.startsWith(signinPagePath)) {
     concealManifest();
     window.VODWorkspace.clearSensitive();
-    if (window.location.pathname.startsWith('/admin/')) {
-      window.location.replace('/admin-signin/');
+    if (isProxiedAdminPage()) {
+      window.location.replace(signinPagePath);
     }
     throw new Error('Session expired; opening sign-in.');
   }
@@ -386,8 +392,8 @@ $('logout').addEventListener('click', async () => {
     $('localUsername').value = 'owner';
     $('accountIdentity').hidden = true;
     refreshFeedback('');
-    if (window.location.pathname.startsWith('/admin/')) {
-      window.location.replace('/admin-signin/');
+    if (isProxiedAdminPage()) {
+      window.location.replace(signinPagePath);
       return;
     }
     // Retain the legacy in-page form ONLY for direct loopback/SSH admin URLs.
