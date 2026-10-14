@@ -219,7 +219,8 @@ async function openSystem() {
   void prepareManifest();
   if (polling) clearInterval(polling);
   polling = setInterval(() => {
-    if (refreshInFlight || currentView !== 'system') return;
+    if (refreshInFlight) return;
+    if (currentView !== 'system') return;
     refresh(false).catch(error => {
       $('bridgeState').textContent = 'Stats unavailable';
       $('bridgeState').className = 'state warn';
