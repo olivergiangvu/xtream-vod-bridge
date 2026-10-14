@@ -109,7 +109,10 @@ def local_lan():
 
 
 DOMAIN = "olivergiangvu.asuscomm.com"
-EXPECTED_ADMIN_IMAGE = "homedocker/xtream-vod-canary-admin:0.5e-cookie-e153b327b49f"
+EXPECTED_ADMIN_IMAGES = {
+    "homedocker/xtream-vod-canary-admin:0.5e-cookie-e153b327b49f": "STAGE4A",
+    "homedocker/xtream-vod-canary-admin:0.5g-prefix-206cf27063b8": "STAGE4C",
+}
 EXPECTED_PLAY_IMAGE = "homedocker/xtream-vod-canary:5c2f02233a0f"
 EXPECTED_PROD_ADMIN = "homedocker/xtream-vod-admin:0.4.3-manifest"
 EXPECTED_PROD_PLAY = "homedocker/xtream-vod-bridge:0.4.0"
@@ -187,7 +190,7 @@ def main():
 
     admin_ip, admin_image = container_ip("xtream-vod-canary-admin")
     play_ip, play_image = container_ip("xtream-vod-canary-playback")
-    if admin_image != EXPECTED_ADMIN_IMAGE or play_image != EXPECTED_PLAY_IMAGE:
+    if admin_image not in EXPECTED_ADMIN_IMAGES or play_image != EXPECTED_PLAY_IMAGE:
         raise ValueError("Unexpected Canary image; refuse to generate nginx routing")
     if lookup_image("xtream-vod-admin")[0] != EXPECTED_PROD_ADMIN:
         raise ValueError("Unexpected production Admin image")
@@ -222,6 +225,7 @@ def main():
     print("LAN_CIDR_FOR_REVIEW=" + lan_cidr)
     print("CANARY_ADMIN_DOCKER_IP=" + admin_ip)
     print("CANARY_PLAYBACK_DOCKER_IP=" + play_ip)
+    print("CANARY_ADMIN_RELEASE=" + EXPECTED_ADMIN_IMAGES[admin_image])
     print("CANARY_INTERNAL_NETWORK=true")
     print("CANARY_HEALTH_AND_UNAUTH_API=PASS")
     print("PRODUCTION_IMAGES_AND_HEALTH=PASS")
