@@ -31,6 +31,7 @@ jobs:
           node --check tests/ui_workspace_smoke.js
           bash -n canary/upgrade_ui_only.sh
           bash -n canary/prepare_stage4_auth.sh
+          python -m py_compile canary/stage4b_preflight.py
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
       - name: Run offline tests
