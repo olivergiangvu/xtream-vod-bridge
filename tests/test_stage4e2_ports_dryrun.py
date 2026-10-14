@@ -18,9 +18,10 @@ def injected(quote='"'):
          f'  xtream-vod-admin:\n    ports:\n      - {quote}127.0.0.1:18770:8768{quote}\n'),
     ]
     for old, new in edits:
-        if text.count(old) != 1:
+        # Match the root service indentation, never nested depends_on names.
+        if text.count("\n" + old) != 1:
             raise RuntimeError("Synthetic fixtures changed")
-        text = text.replace(old, new, 1)
+        text = text.replace("\n" + old, "\n" + new, 1)
     return text
 
 
