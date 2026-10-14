@@ -88,10 +88,7 @@ class RoutePrefixTests(unittest.TestCase):
                 [sys.executable, "-B", "-c", "import route_paths"],
                 env=env, cwd=ROOT, capture_output=True, text=True, timeout=10
             )
-            # Environment parser trims outer whitespace; for newline prefix
-            # the validator may normalize it. All other malformed cases fail.
-            if prefix != "/canary\n":
-                self.assertNotEqual(result.returncode, 0, prefix)
+            self.assertNotEqual(result.returncode, 0, prefix)
 
     def test_gateway_cookie_paths_redirect_and_nonce(self):
         from unittest.mock import patch
