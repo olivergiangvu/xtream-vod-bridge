@@ -93,6 +93,55 @@ def render(source, template, admin_ip, play_ip):
     return candidate, template, directive
 
 
+def check_canary_port_isolation(obj, name):
+    """Fail on active published ports, flag dormant loopback-only metadata.
+
+    Docker metadata can retain HostConfig.PortBindings even when the live
+    NetworkSettings.Ports reports null and docker port has no output.
+    The recorded bind is dormant, but may activate after a recreation.
+    Non-loopback configured binds always fail closed.
+    """
+    configured = obj["HostConfig"].get("PortBindings") or {}
+    actual = obj["NetworkSettings"].get("Ports") or {}
+
+    if not isinstance(configured, dict) or not isinstance(actual, dict):
+        raise ValueError("Canary Docker port metadata malformed: " + name)
+
+    for port, bindings in actual.items():
+        if bindings is not None:
+            # Validated live Docker layout uses JSON null for unpublished.
+            raise ValueError("Canary has effective host port publication: " + name)
+
+    if run("docker", "port", name).strip():
+        raise ValueError("Canary docker port reports host publication: " + name)
+
+    dormant_count = 0
+    for port, bindings in configured.items():
+        if not re.fullmatch(r"\d{1,5}/(?:tcp|udp)", port):
+            raise ValueError("Canary configured port key malformed: " + name)
+        if bindings is None:
+            continue
+        if not isinstance(bindings, list):
+            raise ValueError("Canary configured port metadata malformed: " + name)
+        for entry in bindings:
+            if not isinstance(entry, dict):
+                raise ValueError("Canary configured bind entry malformed: " + name)
+            host_ip = entry.get("HostIp")
+            host_port = entry.get("HostPort")
+            try:
+                if not host_ip or not ipaddress.ip_address(host_ip).is_loopback:
+                    raise ValueError()
+                if not isinstance(host_port, str) or not host_port.isascii():
+                    raise ValueError()
+                if not host_port.isdecimal() or not 1 <= int(host_port) <= 65535:
+                    raise ValueError()
+            except ValueError:
+                raise ValueError("Canary configured non-loopback or unsafe host bind: " + name) from None
+            dormant_count += 1
+
+    return dormant_count
+
+
 def docker_upstreams():
     objects = {}
     for name, expected in IMAGES.items():
@@ -106,15 +155,22 @@ def docker_upstreams():
     if len(network) != 1 or not network[0].get("Internal"):
         raise ValueError("Canary network no longer internal")
     upstreams = []
+    dormant_counts = []
     for name in ("xtream-vod-canary-admin", "xtream-vod-canary-playback"):
         obj = objects[name]
-        if obj["HostConfig"].get("PortBindings"):
-            raise ValueError("Canary unexpectedly publishes host ports")
         networks = obj["NetworkSettings"]["Networks"]
         if len(networks) != 1 or NETWORK not in networks:
             raise ValueError("Canary is not isolated on expected private network")
-        upstreams.append(networks[NETWORK]["IPAddress"])
-    return upstreams
+        dormant_counts.append(check_canary_port_isolation(obj, name))
+        ip = networks[NETWORK].get("IPAddress")
+        try:
+            parsed_ip = ipaddress.ip_address(ip)
+            if parsed_ip.version != 4 or not parsed_ip.is_private:
+                raise ValueError()
+        except ValueError:
+            raise ValueError("Canary Docker address missing/unsafe: " + name) from None
+        upstreams.append(ip)
+    return upstreams, dormant_counts
 
 
 def main():
@@ -124,7 +180,7 @@ def main():
     if hashlib.sha256(original).hexdigest() != VHOST_SHA:
         raise ValueError("Production nginx SHA256 drifted; stop for manual review")
     run("nginx", "-t")
-    admin_ip, play_ip = docker_upstreams()
+    (admin_ip, play_ip), dormant_counts = docker_upstreams()
 
     # HTTPS read-only download; no credentials, authorization headers or cookies.
     opener = build_opener(ProxyHandler({}))
@@ -173,6 +229,9 @@ def main():
     print("PROPOSED_VHOST_SHA256=" + hashlib.sha256(proposal.encode()).hexdigest())
     print("STAGING_NGINX_SYNTAX=" + syntax)
     print("ROLLBACK_BYTE_EXACT=PASS")
+    print("CANARY_EFFECTIVE_HOST_PUBLICATIONS=NONE")
+    print("CANARY_DORMANT_LOOPBACK_BINDINGS=" + str(sum(dormant_counts)))
+    print("WARNING_DORMANT_PORT_BINDINGS_MAY_ACTIVATE_ON_RECREATE=" + str(bool(sum(dormant_counts))).upper())
     print("CANARY_ADMIN_UPSTREAM=" + admin_ip + ":8768")
     print("CANARY_PLAYBACK_UPSTREAM=" + play_ip + ":8767")
     print("CANARY_LAN_ALLOWLIST=" + LAN)
