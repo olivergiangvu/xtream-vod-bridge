@@ -16,8 +16,8 @@ CHECK = (
     "print('SESSION=' + admin_auth.COOKIE); "
     "print('NONCE=' + admin_ui.GATE_LOGIN_COOKIE); "
     "print('REFERRER=' + admin_ui.GATEWAY_REFERRER_POLICY); "
-    "print('META=' + ('content=\\\"' + admin_ui.GATEWAY_REFERRER_POLICY + '\\\"' "
-    "in admin_ui._gate_page('', 'testnonce')))"
+    "print('META=' + str(admin_ui.GATEWAY_REFERRER_POLICY in "
+    "admin_ui._gate_page('', 'testnonce')))"
 )
 
 
