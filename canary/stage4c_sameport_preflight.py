@@ -147,14 +147,20 @@ def find_server_config(dump):
         raise ValueError("Production vhost outside /etc/nginx; manual review required")
     if not resolved.is_file():
         raise ValueError("Public nginx vhost file not found")
-    required = [
-        r"location\s+\^~\s+/admin/",
-        r"location\s+\^~\s+/admin-signin/",
-        r"auth_request\s+/__xtream_admin_gate_check",
-        r"location\s+/\s*\{",
-    ]
-    if not all(re.search(pattern, block) for pattern in required):
-        raise ValueError("Current production gateway layout differs; review manually")
+    required = {
+        "admin_location": r"location\s+\^~\s+/admin/",
+        "signin_location": r"location\s+\^~\s+/admin-signin/",
+        "auth_request_gate": r"auth_request\s+/__xtream_admin_gate_check",
+        "playback_root_location": r"location\s+/\s*\{",
+    }
+    missing = [name for name, pattern in required.items()
+               if not re.search(pattern, block)]
+    if missing:
+        # Output ONLY fixed, non-sensitive check IDs, never the nginx body.
+        # This prevents an unnecessary Production vhost rewrite if an
+        # existing gate uses valid but different nginx location syntax.
+        raise ValueError("Production routing signature mismatch: "
+                         + ",".join(missing))
     if PREFIX_CLAUSE.search(block) or "/canary/" in block:
         raise ValueError("Existing /canary/ routes detected; refuse to overwrite")
     return filename, resolved, block
