@@ -30,6 +30,7 @@ jobs:
           node --check admin/assets/workspace.js
           node --check tests/ui_workspace_smoke.js
           bash -n canary/upgrade_ui_only.sh
+          bash -n canary/prepare_stage4_auth.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
       - name: Run offline tests
