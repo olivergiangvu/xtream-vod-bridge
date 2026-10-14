@@ -31,6 +31,7 @@ import admin_users
 import user_sources
 import personal_index
 import personal_manifests
+import route_paths
 
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
@@ -177,7 +178,7 @@ button:hover{{filter:brightness(1.12)}}button:focus-visible{{outline:2px solid #
 <p>Sign in with your HomeDocker account to manage the VOD bridge.
 No separate nginx Gateway password is needed.</p>
 <p class="notice" role="alert">{message}</p>
-<form method="post" action="/admin-signin/" autocomplete="on">
+<form method="post" action="{route_paths.LOGIN_PATH}" autocomplete="on">
 <input type="hidden" name="nonce" value="{nonce}">
 <label for="username">Username</label>
 <input id="username" name="username" type="text" value="{username}" required maxlength="32"
@@ -197,11 +198,11 @@ autocomplete="current-password">
 def gateway_login_page(request: Request):
     existing = admin_auth.session_info(request.cookies.get(admin_auth.COOKIE))
     if existing:
-        return RedirectResponse("/admin/", status_code=303)
+        return RedirectResponse(route_paths.ADMIN_PATH, status_code=303)
     nonce = secrets.token_urlsafe(32)
     result = HTMLResponse(_gate_page("", nonce))
     result.set_cookie(GATE_LOGIN_COOKIE, nonce, secure=True, httponly=True,
-                      samesite="strict", path="/admin-signin/", max_age=600)
+                      samesite="strict", path=route_paths.NONCE_COOKIE_PATH, max_age=600)
     return result
 
 
@@ -277,16 +278,16 @@ async def gateway_login_submit(request: Request):
                                 status_code=401)
         response.set_cookie(GATE_LOGIN_COOKIE, new_nonce,
                             secure=True, httponly=True, samesite="strict",
-                            path="/admin-signin/", max_age=600)
+                            path=route_paths.NONCE_COOKIE_PATH, max_age=600)
         return response
     except RuntimeError:
         raise HTTPException(503, "Admin password not provisioned") from None
-    response = RedirectResponse("/admin/", status_code=303)
+    response = RedirectResponse(route_paths.ADMIN_PATH, status_code=303)
     response.set_cookie(admin_auth.COOKIE, session, httponly=True,
                         secure=True, samesite="strict",
                         path=admin_auth.COOKIE_PATH,
                         max_age=admin_auth.SESSION_SECONDS)
-    response.delete_cookie(GATE_LOGIN_COOKIE, path="/admin-signin/")
+    response.delete_cookie(GATE_LOGIN_COOKIE, path=route_paths.NONCE_COOKIE_PATH)
     return response
 
 
