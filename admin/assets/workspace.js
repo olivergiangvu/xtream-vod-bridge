@@ -6,6 +6,8 @@
  */
 (() => {
   const $ = id => document.getElementById(id);
+  const adminPagePath = new URL('.', document.baseURI).pathname;
+  const signinPagePath = new URL('../admin-signin/', document.baseURI).pathname;
   let callApi = null;
   let account = null;
   let sources = [];
@@ -42,8 +44,8 @@
   const failure = err => {
     if (err && err.message === 'Please sign in again.') {
       clearSensitive();
-      if (location.pathname.startsWith('/admin/')) {
-        location.replace('/admin-signin/');
+      if (adminPagePath !== '/' && location.pathname.startsWith(adminPagePath)) {
+        location.replace(signinPagePath);
       }
     }
     return err && err.message ? err.message : 'Service unavailable';
