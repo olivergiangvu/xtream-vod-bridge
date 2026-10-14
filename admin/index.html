@@ -6,20 +6,23 @@
   <meta name="color-scheme" content="dark">
   <title>Xtream VOD Bridge · HomeDocker</title>
   <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/workspace.js" defer></script>
   <script src="assets/app.js" defer></script>
 </head>
 <body>
   <div class="shell">
     <header class="topbar">
       <div class="mark"><span class="glyph">X</span><div><div class="product">Xtream VOD Bridge</div><div class="muted small">HomeDocker · Private Console</div></div></div>
-      <div class="toolbar"><span id="bridgeState" class="state">Not connected</span><button id="refresh" class="ghost" type="button" hidden>Refresh stats</button><span id="refreshStatus" class="small muted" role="status" aria-live="polite" aria-atomic="true" hidden></span><button id="logout" class="ghost" type="button" hidden>Lock</button></div>
+      <div class="toolbar"><span id="accountIdentity" class="soft-pill" hidden></span><span id="bridgeState" class="state">Not connected</span><button id="refresh" class="ghost" type="button" hidden>Refresh stats</button><span id="refreshStatus" class="small muted" role="status" aria-live="polite" aria-atomic="true" hidden></span><button id="logout" class="ghost" type="button" hidden>Lock</button></div>
     </header>
     <section id="login" class="login-panel">
       <div class="eyebrow">LOCAL ADMIN</div>
-      <h1>Connect to your bridge</h1>
-      <p>Sign in with your HomeDocker Admin password. Your browser keeps a secure session for up to 12 hours—no token to copy for everyday use.</p>
+      <h1>Sign in to your bridge</h1>
+      <p>Sign in with your HomeDocker account. Your browser keeps a secure session for up to 12 hours—no token to copy for everyday use.</p>
       <form id="loginForm">
-        <label for="secret">Admin password</label>
+        <label for="localUsername">Username</label>
+        <input id="localUsername" type="text" name="username" value="owner" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="32" required>
+        <label for="secret">Password</label>
         <input id="secret" type="password" name="password" autocomplete="current-password" spellcheck="false" required placeholder="Enter Admin password" minlength="14">
         <button type="submit" class="primary">Sign in</button>
       </form>
@@ -37,6 +40,94 @@
       <p class="hint">Admin access is protected by HTTPS, account authentication and LAN ingress rules. Never forward backend port 18768.</p>
     </section>
     <main id="main" hidden>
+      <nav class="workspace-nav" aria-label="Workspace navigation">
+        <button id="navPersonal" type="button" class="active" aria-current="page">My Workspace</button>
+        <button id="navSystem" type="button" hidden>System Administration</button>
+      </nav>
+      <section id="personalWorkspace" aria-label="Personal Xtream/M3U sources and manifests">
+        <div class="section-heading">
+          <div><div class="eyebrow">MY WORKSPACE</div><h1>My Sources &amp; Addons</h1>
+          <p class="muted">Manage your own Xtream or M3U VOD sources. Every personal manifest is restricted to sources you own.</p></div>
+          <span id="workspaceIdentity" class="soft-pill">My account</span>
+        </div>
+        <div class="workspace-grid">
+          <section class="panel">
+            <div class="panel-header"><div><div class="eyebrow">01 · SOURCES</div><h2>My IPTV Sources</h2></div>
+            <button id="sourcesRefresh" type="button" class="ghost">Refresh</button></div>
+            <p class="muted">Credentials are encrypted server-side. Saved passwords and private playlist URLs are never returned to your browser.</p>
+            <div id="sourceList" class="item-list" aria-live="polite"></div>
+            <div class="divider-line"></div>
+            <h3 id="sourceFormTitle">Add a source</h3>
+            <form id="personalSourceForm" autocomplete="off">
+              <div class="form-grid">
+                <div><label for="personalSourceName">Source name</label><input id="personalSourceName" type="text" required maxlength="64" placeholder="My IPTV"></div>
+                <div><label for="personalSourceKind">Source type</label><select id="personalSourceKind"><option value="xtream">Xtream Codes</option><option value="m3u">M3U Playlist URL</option></select></div>
+              </div>
+              <label class="checkbox-line" id="replaceConfigRow" hidden>
+                <input id="replaceSourceConfig" type="checkbox"> Replace saved provider credentials / playlist URL
+              </label>
+              <div id="xtreamFields">
+                <label for="personalXtreamBase">Xtream server URL (HTTPS)</label>
+                <input id="personalXtreamBase" type="url" placeholder="https://provider.example:8443" autocomplete="off">
+                <div class="form-grid">
+                  <div><label for="personalXtreamUser">Provider username</label><input id="personalXtreamUser" type="text" autocomplete="off" spellcheck="false"></div>
+                  <div><label for="personalXtreamPassword">Provider password</label><input id="personalXtreamPassword" type="password" autocomplete="new-password" spellcheck="false"></div>
+                </div>
+              </div>
+              <div id="m3uFields" hidden>
+                <label for="personalM3uUrl">M3U Playlist URL (HTTPS)</label>
+                <input id="personalM3uUrl" type="url" placeholder="https://provider.example/playlist.m3u" autocomplete="off" spellcheck="false">
+              </div>
+              <p class="small muted">VOD Movies &amp; Series only. HTTP-only IPTV servers, Live TV, EPG and playlists without verified media IDs are not yet supported.</p>
+              <div class="buttons"><button id="sourceSave" type="submit" class="primary">Add source</button>
+              <button id="sourceCancel" type="button" class="ghost" hidden>Cancel editing</button></div>
+            </form>
+            <p id="sourceStatus" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+          <section class="panel">
+            <div class="panel-header"><div><div class="eyebrow">02 · MY ADDONS</div><h2>Personal Manifests</h2></div>
+            <button id="manifestsRefresh" type="button" class="ghost">Refresh</button></div>
+            <p class="muted">Create an addon for your own sources, then copy its private URL into AIOStreams Custom Addon. Each URL is shown only once.</p>
+            <div id="personalManifestList" class="item-list" aria-live="polite"></div>
+            <div class="divider-line"></div>
+            <h3>Create personal manifest</h3>
+            <form id="personalManifestForm" autocomplete="off">
+              <label for="personalManifestName">Addon display name</label>
+              <input id="personalManifestName" type="text" maxlength="64" required placeholder="My Private VOD">
+              <label>Choose your sources</label>
+              <div id="manifestSourceChoices" class="source-choices" role="group" aria-label="Your sources"></div>
+              <button id="personalManifestCreate" class="primary" type="submit">Create manifest</button>
+            </form>
+            <div id="issuedManifestPanel" class="issued-manifest" hidden>
+              <strong id="issuedManifestHeading">New private addon URL</strong>
+              <p class="small muted">This link is shown once. Copy it now and store it in your password manager. Rotating the URL revokes the previous one.</p>
+              <label for="issuedManifestUrl">Manifest URL</label>
+              <input id="issuedManifestUrl" type="password" readonly autocomplete="off" spellcheck="false">
+              <div class="buttons">
+                <button id="issuedManifestCopy" type="button" class="primary">Copy URL</button>
+                <button id="issuedManifestReveal" type="button" class="ghost" aria-pressed="false">Show</button>
+                <button id="issuedManifestDismiss" type="button" class="ghost">I've saved it</button>
+              </div>
+            </div>
+            <p id="personalManifestStatus" class="small muted" role="status" aria-live="polite"></p>
+          </section>
+        </div>
+        <section class="panel" id="usersPanel" hidden>
+          <div class="panel-header"><div><div class="eyebrow">ADMIN ONLY</div><h2>User Management</h2></div>
+          <button id="usersRefresh" class="ghost" type="button">Refresh</button></div>
+          <p class="muted">Create User accounts, disable access or reset passwords. The built-in <code>owner</code> remains the Admin account.</p>
+          <div id="adminUserList" class="item-list"></div>
+          <form id="adminNewUserForm" autocomplete="off" class="user-create-form">
+            <div class="form-grid">
+              <div><label for="newAccountUsername">Username</label><input id="newAccountUsername" type="text" required minlength="3" maxlength="32" pattern="[a-z][a-z0-9_-]{2,31}" autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="alice"></div>
+              <div><label for="newAccountPassword">Temporary password (14+ characters)</label><input id="newAccountPassword" type="password" required minlength="14" maxlength="128" autocomplete="new-password"></div>
+            </div>
+            <div class="buttons"><button type="submit" class="primary" id="newAccountCreate">Create User</button></div>
+          </form>
+          <p class="small muted" id="adminUsersStatus" role="status" aria-live="polite"></p>
+        </section>
+      </section>
+      <section id="adminWorkspace" hidden>
       <div class="section-heading"><div><div class="eyebrow">OVERVIEW</div><h1>Operations at a glance</h1></div><span id="lastCheck" class="muted small"></span></div>
       <section class="metrics" aria-label="Index metrics">
         <article class="metric"><div class="muted">Movies</div><strong id="movies">—</strong><span class="small muted">Catalog entries</span></article>
@@ -94,6 +185,7 @@
         </div>
       </div>
       <footer class="muted small">LAN-restricted HTTPS or SSH console · Separate Docker admin port · Settings stored in existing SQLite volume · Signed playback unchanged</footer>
+      </section>
     </main>
   </div>
 </body>
