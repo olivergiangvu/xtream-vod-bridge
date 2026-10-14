@@ -12,8 +12,10 @@ REFERENCE = (Path(__file__).resolve().parents[1] / "canary/compose.yaml").read_t
 def injected(quote='"'):
     text = REFERENCE
     edits = [
-        ("    env_file:", f'    ports:\n      - {quote}127.0.0.1:18769:8767{quote}\n    env_file:'),
-        ("    depends_on:", f'    ports:\n      - {quote}127.0.0.1:18770:8768{quote}\n    depends_on:'),
+        ("  xtream-vod-bridge:\n",
+         f'  xtream-vod-bridge:\n    ports:\n      - {quote}127.0.0.1:18769:8767{quote}\n'),
+        ("  xtream-vod-admin:\n",
+         f'  xtream-vod-admin:\n    ports:\n      - {quote}127.0.0.1:18770:8768{quote}\n'),
     ]
     for old, new in edits:
         if text.count(old) != 1:
