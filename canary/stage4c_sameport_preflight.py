@@ -169,13 +169,11 @@ def find_server_config(dump):
 
 
 def verify_public_signin_https():
-    """Verify the real public vhost login route by SNI on local HTTPS :18450.
+    """Prove production login works on the exact existing TLS/SNI vhost.
 
-    nginx -T shows physical include files separately, not expanded inline
-    inside their parent server. A login location from a server-level include
-    can therefore be absent from the selected vhost's text despite working
-    correctly. Verify the actual SNI/Host route rather than guessing which
-    include file owns it. No credentials, tokens or response bodies are logged.
+    nginx -T separates included physical files, so an otherwise working
+    /admin-signin/ location may not appear inline in the public server block.
+    Probe the real HTTPS response instead. No secrets or cookies are printed.
     """
     context = ssl.create_default_context()
     try:
@@ -183,24 +181,24 @@ def verify_public_signin_https():
             with context.wrap_socket(tcp, server_hostname=DOMAIN) as tls:
                 tls.settimeout(8)
                 request = (
-                    "GET /admin-signin/ HTTP/1.1\\r\\n"
-                    f"Host: {DOMAIN}:18450\\r\\n"
-                    "Accept: text/html\\r\\n"
-                    "Connection: close\\r\\n\\r\\n"
-                ).replace("\\\\r", "\\r").replace("\\\\n", "\\n")
+                    "GET /admin-signin/ HTTP/1.1\r\n"
+                    f"Host: {DOMAIN}:18450\r\n"
+                    "Accept: text/html\r\n"
+                    "Connection: close\r\n\r\n"
+                )
                 tls.sendall(request.encode("ascii"))
                 response = http.client.HTTPResponse(tls)
                 response.begin()
                 status = response.status
                 content_type = response.getheader("Content-Type", "")
-                set_cookies = response.getheaders()
+                cookies = response.getheaders()
                 body = response.read(131072)
-    except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+    except (OSError, ssl.SSLError, http.client.HTTPException):
         raise ValueError("Public Safari sign-in HTTPS probe failed") from None
     nonce_cookie = any(
         key.lower() == "set-cookie" and
         value.startswith("xtream_admin_login_nonce=")
-        for key, value in set_cookies
+        for key, value in cookies
     )
     if (
         status != 200
@@ -209,7 +207,9 @@ def verify_public_signin_https():
         or b'name="nonce"' not in body
         or not nonce_cookie
     ):
-        raise ValueError("Public Safari sign-in response does not match secure Gateway")
+        raise ValueError(
+            "Public Safari sign-in response does not match secure Gateway"
+        )
     return True
 
 
