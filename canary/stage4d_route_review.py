@@ -69,13 +69,13 @@ def render(source, template, admin_ip, play_ip):
     if admin_ip == play_ip:
         raise ValueError("Canary upstream address collision")
     replacements = {
-        "__CANARY_ADMIN_IP__": admin_ip,
-        "__CANARY_PLAY_IP__": play_ip,
-        "__CANARY_LAN_CIDR__": LAN,
+        "__CANARY_ADMIN_IP__": (admin_ip, 3),
+        "__CANARY_PLAY_IP__": (play_ip, 2),
+        "__CANARY_LAN_CIDR__": (LAN, 4),
     }
-    for placeholder, replacement in replacements.items():
-        if template.count(placeholder) < 1:
-            raise ValueError("Nginx template placeholder missing")
+    for placeholder, (replacement, exact_count) in replacements.items():
+        if template.count(placeholder) != exact_count:
+            raise ValueError("Nginx template placeholder count mismatch")
         template = template.replace(placeholder, replacement)
     if "__CANARY_" in template:
         raise ValueError("Nginx template contains unresolved placeholder")
