@@ -31,13 +31,18 @@ async function api(path, method = 'GET', value = undefined) {
   // A redirected HTML page is not an API success response.
   if (response.redirected && new URL(response.url).pathname.startsWith('/admin-signin/')) {
     concealManifest();
+    window.VODWorkspace.clearSensitive();
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
     }
     throw new Error('Session expired; opening sign-in.');
   }
-  if (response.status === 401) throw new Error('Please sign in again.');
+  if (response.status === 401) {
+    window.VODWorkspace.clearSensitive();
+    throw new Error('Please sign in again.');
+  }
   if (!response.ok) {
+    if (response.status === 403) throw new Error('Permission denied for this account.');
     if (response.status === 422) {
       const failure = await response.json();
       throw new Error(String(failure.detail || 'Invalid setting'));
@@ -186,25 +191,61 @@ $('manifestCopy').addEventListener('click', async () => {
 });
 
 $('sourceLabel').addEventListener('input', updatePreview);
-async function showDashboard() {
-  await refresh(true);
-  $('secret').value = '';
-  $('legacySecret').value = '';
-  $('login').hidden = true;
-  $('main').hidden = false;
+let currentView = 'personal';
+function openPersonal() {
+  currentView = 'personal';
+  $('personalWorkspace').hidden = false;
+  $('adminWorkspace').hidden = true;
+  $('navPersonal').classList.add('active');
+  $('navPersonal').setAttribute('aria-current', 'page');
+  $('navSystem').classList.remove('active');
+  $('navSystem').removeAttribute('aria-current');
+  $('refresh').hidden = true;
+  if (polling) { clearInterval(polling); polling = null; }
+  $('bridgeState').textContent = '● Personal workspace';
+  $('bridgeState').className = 'state success';
+}
+async function openSystem() {
+  if (!window.VODWorkspace.isAdmin()) return;
+  currentView = 'system';
+  $('personalWorkspace').hidden = true;
+  $('adminWorkspace').hidden = false;
+  $('navPersonal').classList.remove('active');
+  $('navPersonal').removeAttribute('aria-current');
+  $('navSystem').classList.add('active');
+  $('navSystem').setAttribute('aria-current', 'page');
   $('refresh').hidden = false;
-  $('logout').hidden = false;
-  refreshFeedback('');
+  await refresh(true);
   void prepareManifest();
   if (polling) clearInterval(polling);
   polling = setInterval(() => {
-    if (refreshInFlight) return;
+    if (refreshInFlight || currentView !== 'system') return;
     refresh(false).catch(error => {
       $('bridgeState').textContent = 'Stats unavailable';
       $('bridgeState').className = 'state warn';
       refreshFeedback('Auto-refresh failed: ' + error.message, true);
     });
   }, 15000);
+}
+$('navPersonal').addEventListener('click', () => {
+  openPersonal();
+  window.VODWorkspace.refreshSources().catch(() => {});
+  window.VODWorkspace.refreshManifests().catch(() => {});
+});
+$('navSystem').addEventListener('click', () => {
+  openSystem().catch(error => refreshFeedback('System unavailable: ' + error.message, true));
+});
+async function showDashboard(identity) {
+  $('secret').value = '';
+  $('legacySecret').value = '';
+  $('login').hidden = true;
+  $('main').hidden = false;
+  $('logout').hidden = false;
+  $('refresh').hidden = true;
+  refreshFeedback('');
+  concealManifest();
+  openPersonal();
+  await window.VODWorkspace.activate(identity, api);
 }
 
 $('loginForm').addEventListener('submit', async (event) => {
@@ -213,20 +254,27 @@ $('loginForm').addEventListener('submit', async (event) => {
   adminToken = '';
   csrfToken = '';
   const password = $('secret').value;
+  const username = $('localUsername').value.trim();
   try {
     const response = await fetch(new URL('auth/login', adminApiRoot), {
       method: 'POST',
       credentials: 'same-origin',
       cache: 'no-store',
       headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-      body: JSON.stringify({password}),
+      body: JSON.stringify({username, password}),
     });
     if (response.status === 429) throw new Error('Too many attempts. Try again in 15 minutes.');
     if (response.status === 503) throw new Error('Set the Admin password on HomeDocker via SSH first.');
     if (!response.ok) throw new Error('Invalid password, or this access route is not approved.');
     const result = await response.json();
     csrfToken = result.csrf_token;
-    await showDashboard();
+    const profile = await fetch(new URL('auth/session', adminApiRoot), {
+      cache: 'no-store', credentials: 'same-origin',
+    });
+    if (!profile.ok) throw new Error('Could not confirm account permissions.');
+    const identity = await profile.json();
+    if (!identity.authenticated || !identity.role) throw new Error('Session missing user role.');
+    await showDashboard(identity);
   } catch (error) {
     $('loginError').textContent = error.message;
   } finally {
@@ -240,7 +288,7 @@ $('legacyLoginForm').addEventListener('submit', async (event) => {
   csrfToken = '';
   $('loginError').textContent = '';
   try {
-    await showDashboard();
+    await showDashboard({username: 'owner', role: 'admin'});
   } catch (error) {
     adminToken = '';
     $('loginError').textContent = error.message;
@@ -260,7 +308,8 @@ async function restoreSession() {
     if (result.authenticated && result.csrf_token) {
       csrfToken = result.csrf_token;
       adminToken = '';
-      await showDashboard();
+      if (!result.role) throw new Error('Session missing account role');
+      await showDashboard(result);
     }
   } catch (_) {
     $('setupHint').hidden = false;
@@ -329,7 +378,12 @@ $('logout').addEventListener('click', async () => {
     $('legacySecret').value = '';
     $('sourceLabel').value = '';
     concealManifest();
+    window.VODWorkspace.clearSensitive();
     $('manifestStatus').textContent = '';
+    $('personalWorkspace').hidden = true;
+    $('adminWorkspace').hidden = true;
+    $('localUsername').value = 'owner';
+    $('accountIdentity').hidden = true;
     refreshFeedback('');
     if (window.location.pathname.startsWith('/admin/')) {
       window.location.replace('/admin-signin/');
