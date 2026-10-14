@@ -18,6 +18,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 import ops
+import route_paths
 
 # Cookies are shared between ports on the same hostname. Stage 4 Canary
 # MUST use a different cookie name to avoid replacing the production :18450
@@ -31,7 +32,7 @@ def _session_cookie_name():
 
 
 COOKIE = _session_cookie_name()
-COOKIE_PATH = "/admin/"
+COOKIE_PATH = route_paths.SESSION_COOKIE_PATH
 SESSION_SECONDS = 12 * 3600
 ITERATIONS = 600_000
 MAX_ATTEMPTS = 5
