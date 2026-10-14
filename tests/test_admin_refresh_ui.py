@@ -51,7 +51,8 @@ class RefreshFeedbackTests(unittest.TestCase):
         js = JS.read_text(encoding="utf-8")
         self.assertIn("response.redirected", js)
         self.assertIn("response.url", js)
-        self.assertIn("window.location.replace('/admin-signin/')", js)
+        self.assertIn("const signinPagePath = new URL('../admin-signin/', document.baseURI).pathname", js)
+        self.assertIn("window.location.replace(signinPagePath)", js)
         self.assertIn("Unexpected API response (expected JSON)", js)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js not present")
