@@ -33,6 +33,7 @@ jobs:
           bash -n canary/prepare_stage4_auth.sh
           python -m py_compile canary/stage4b_preflight.py
           python -m py_compile canary/stage4c_sameport_preflight.py
+          python -m py_compile canary/stage4d_route_review.py
           bash -n canary/upgrade_same_port_containers.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
