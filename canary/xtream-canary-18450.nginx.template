@@ -1,0 +1,104 @@
+# HomeDocker Stage 4D: template ONLY, never include this file directly.
+# Substitutions are performed by the fail-closed offline route reviewer.
+# LAN access can be spoofed by ASUS WAN SNAT: verify real WAN denial.
+# These paths share the production browser origin; cookie Path is not JS isolation.
+location = /canary { access_log off; return 404; }
+location = /canary/ { access_log off; return 404; }
+location = /canary/admin { access_log off; return 308 /canary/admin/; }
+location = /canary/admin-signin { access_log off; return 308 /canary/admin-signin/; }
+
+location = /__xtream_canary_admin_gate_check {
+    internal;
+    auth_basic off;
+    auth_request off;
+    proxy_pass http://__CANARY_ADMIN_IP__:8768/api/auth/gate-check;
+    proxy_http_version 1.1;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header Authorization "";
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    access_log off;
+}
+
+location @xtream_canary_to_login {
+    return 302 /canary/admin-signin/;
+}
+
+location ^~ /canary/admin/ {
+    allow __CANARY_LAN_CIDR__;
+    deny all;
+    satisfy all;
+    auth_basic off;
+    auth_request /__xtream_canary_admin_gate_check;
+    error_page 401 = @xtream_canary_to_login;
+    proxy_pass http://__CANARY_ADMIN_IP__:8768/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header Authorization "";
+    proxy_set_header Connection "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    access_log off;
+    add_header Cache-Control "no-store" always;
+}
+
+location ^~ /canary/admin-signin/ {
+    allow __CANARY_LAN_CIDR__;
+    deny all;
+    auth_basic off;
+    auth_request off;
+    proxy_pass http://__CANARY_ADMIN_IP__:8768/gateway/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header X-Forwarded-For "";
+    proxy_set_header Authorization "";
+    proxy_set_header Connection "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 30s;
+    client_max_body_size 4k;
+    access_log off;
+    add_header Cache-Control "no-store" always;
+    add_header Referrer-Policy "same-origin" always;
+}
+
+location ^~ /canary/a/ {
+    allow __CANARY_LAN_CIDR__;
+    deny all;
+    auth_basic off;
+    auth_request off;
+    proxy_pass http://__CANARY_PLAY_IP__:8767/a/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Authorization "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 120s;
+    access_log off;
+}
+
+location ^~ /canary/play/ {
+    allow __CANARY_LAN_CIDR__;
+    deny all;
+    auth_basic off;
+    auth_request off;
+    proxy_pass http://__CANARY_PLAY_IP__:8767/play/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    proxy_set_header Authorization "";
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 300s;
+    proxy_buffering off;
+    access_log off;
+}
+
+location ^~ /canary/ {
+    access_log off;
+    return 404;
+}
