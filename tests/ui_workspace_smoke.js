@@ -62,14 +62,14 @@ function response(body, status = 200, url = 'https://canary.invalid/admin/api') 
   };
 }
 
-async function run(role) {
+async function run(role, prefix = '') {
   const elements = new Map();
   const get = id => {
     if (!elements.has(id)) elements.set(id, new Element('div', id));
     return elements.get(id);
   };
   const document = {
-    baseURI: 'https://canary.invalid/admin/',
+    baseURI: 'https://canary.invalid' + prefix + '/admin/', 
     getElementById: get,
     createElement: tag => new Element(tag),
     createTextNode: text => ({textContent: text}),
@@ -83,6 +83,7 @@ async function run(role) {
     const pathname = new URL(url).pathname;
     const method = args.method || 'GET';
     calls.push({pathname, method, body: args.body ? JSON.parse(args.body) : null});
+    if (pathname.endsWith('/auth/logout')) return response({authenticated: false});
     if (pathname.endsWith('/auth/session')) return response({
       authenticated: true, csrf_token: 'test-csrf', username: role === 'admin' ? 'owner' : 'alice',
       role, password_ready: true,
@@ -125,8 +126,8 @@ async function run(role) {
     throw new Error('Unexpected request ' + method + ' ' + pathname);
   };
   const location = {
-    pathname: '/admin/',
-    replace(value) { throw new Error('Unexpected redirect ' + value); },
+    pathname: prefix + '/admin/', 
+    replace(value) { this.replaced = value; },
   };
   const context = vm.createContext({
     document, location,
@@ -188,7 +189,11 @@ async function run(role) {
     assert.equal(get('issuedManifestPanel').hidden, true);
     assert.equal(get('issuedManifestUrl').value, '');
     assert(!calls.some(c => /\/(system\/users|overview|manifest)$/.test(c.pathname)));
-    console.log('V05D_USER_WORKSPACE_RUNTIME=PASS');
+    await get('logout').handlers.click();
+    assert.equal(location.replaced, prefix + '/admin-signin/',
+      'Logout must redirect to the matched Canary or production login path');
+    assert.equal(get('issuedManifestPanel').hidden, true);
+    console.log('V05D_USER_WORKSPACE_RUNTIME=PASS', prefix || '(root)');
   } else {
     assert.equal(get('navSystem').hidden, false);
     assert.equal(get('usersPanel').hidden, false);
@@ -204,13 +209,15 @@ async function run(role) {
            'Admin System tab should request global manifest');
     assert(calls.some(c => c.pathname.endsWith('/system/users')),
            'Admin should be able to manage User accounts');
-    console.log('V05D_ADMIN_SYSTEM_RUNTIME=PASS');
+    console.log('V05D_ADMIN_SYSTEM_RUNTIME=PASS', prefix || '(root)');
   }
 }
 
 (async () => {
   await run('user');
   await run('admin');
+  await run('user', '/canary');
+  await run('admin', '/canary');
 })().catch(error => {
   console.error(error.stack);
   process.exitCode = 1;
