@@ -7,12 +7,9 @@ Discovers the single source config file owning the production public vhost.
 from __future__ import annotations
 
 import hashlib
-import http.client
 import ipaddress
 import json
 import re
-import socket
-import ssl
 import subprocess
 from pathlib import Path
 from urllib.error import HTTPError
@@ -168,48 +165,54 @@ def find_server_config(dump):
     return filename, resolved, block
 
 
-def verify_public_signin_https(bind_ip):
-    """Prove production login works on the exact existing TLS/SNI vhost.
+def verify_public_signin_https(lan_ip):
+    """Read-only HTTPS GET using curl's validated TLS and exact :18450 SNI.
 
-    nginx -T separates included physical files, so an otherwise working
-    /admin-signin/ location may not appear inline in the public server block.
-    Probe the real HTTPS response instead. No secrets or cookies are printed.
+    A server-level nginx include can define /admin-signin/ in a separate
+    source file. nginx -T will not render it inline in its parent vhost.
+    Verify the route actually served on the production public Host instead.
+
+    --resolve sends the request to HomeDocker's approved LAN IP, while
+    cert verification and the HTTP Host retain the public domain name.
+    No credentials are sent and no cookie, nonce, HTML or curl error is logged.
     """
-    context = ssl.create_default_context()
-    try:
-        with socket.create_connection((bind_ip, 18450), timeout=8) as tcp:
-            with context.wrap_socket(tcp, server_hostname=DOMAIN) as tls:
-                tls.settimeout(8)
-                request = (
-                    "GET /admin-signin/ HTTP/1.1\r\n"
-                    f"Host: {DOMAIN}:18450\r\n"
-                    "Accept: text/html\r\n"
-                    "Connection: close\r\n\r\n"
-                )
-                tls.sendall(request.encode("ascii"))
-                response = http.client.HTTPResponse(tls)
-                response.begin()
-                status = response.status
-                content_type = response.getheader("Content-Type", "")
-                cookies = response.getheaders()
-                body = response.read(131072)
-    except (OSError, ssl.SSLError, http.client.HTTPException):
-        raise ValueError("Public Safari sign-in HTTPS probe failed") from None
-    nonce_cookie = any(
-        key.lower() == "set-cookie" and
-        value.startswith("xtream_admin_login_nonce=")
-        for key, value in cookies
+    ip = ipaddress.ip_address(lan_ip)
+    if ip.version != 4 or not ip.is_private:
+        raise ValueError("Public sign-in probe requires private IPv4 LAN")
+    url = f"https://{DOMAIN}:18450/admin-signin/"
+    result = subprocess.run(
+        [
+            "curl", "--noproxy", "*", "--silent", "--show-error",
+            "--http1.1", "--max-time", "10",
+            "--resolve", f"{DOMAIN}:18450:{ip}",
+            "--include", "--header", "Accept: text/html",
+            url,
+        ],
+        capture_output=True, text=True, timeout=15,
     )
-    if (
-        status != 200
-        or not content_type.lower().startswith("text/html")
-        or b'action="/admin-signin/"' not in body
-        or b'name="nonce"' not in body
-        or not nonce_cookie
+    if result.returncode:
+        raise ValueError("Public Safari sign-in HTTPS verification failed")
+    head, sep, body = result.stdout.partition("\r\n\r\n")
+    if not sep:
+        head, sep, body = result.stdout.partition("\n\n")
+    if not sep:
+        raise ValueError("Public Safari sign-in response missing HTTP headers")
+    header_lines = head.splitlines()
+    good_status = bool(header_lines and re.fullmatch(
+        r"HTTP/1\.[01] 200(?: .*)?", header_lines[0]
+    ))
+    html_type = any(re.match(r"(?i)^content-type:\s*text/html", line)
+                    for line in header_lines)
+    nonce_cookie = any(
+        re.match(r"(?i)^set-cookie:\s*xtream_admin_login_nonce=", line)
+        for line in header_lines
+    )
+    if not (
+        good_status and html_type and nonce_cookie
+        and 'action="/admin-signin/"' in body
+        and 'name="nonce"' in body
     ):
-        raise ValueError(
-            "Public Safari sign-in response does not match secure Gateway"
-        )
+        raise ValueError("Public Safari sign-in response does not match secure Gateway")
     return True
 
 
