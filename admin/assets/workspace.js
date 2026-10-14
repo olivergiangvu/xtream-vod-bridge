@@ -410,19 +410,44 @@
             status('adminUsersStatus', 'Account status updated.');
           } catch (e) { status('adminUsersStatus', failure(e), true); }
         }));
-        buttons.append(action('Reset password', async () => {
-          // Never echo passwords in user lists, status, logs or browser storage.
-          const next = window.prompt('Enter a new strong password (14–128 characters) for ' + u.username + ':');
-          if (next === null) return;
-          if (next.length < 14 || next.length > 128) {
-            status('adminUsersStatus', 'Password must be 14–128 characters.', true);
-            return;
-          }
+        const resetForm = el('form', 'inline-reset');
+        resetForm.hidden = true;
+        resetForm.autocomplete = 'off';
+        const resetLabel = el('label', '', 'New password for ' + u.username);
+        const resetInput = el('input');
+        resetInput.type = 'password';
+        resetInput.autocomplete = 'new-password';
+        resetInput.minLength = 14;
+        resetInput.maxLength = 128;
+        resetInput.required = true;
+        const resetSubmit = el('button', 'primary', 'Confirm reset');
+        resetSubmit.type = 'submit';
+        const resetCancel = action('Cancel', () => {
+          resetInput.value = '';
+          resetForm.hidden = true;
+        });
+        resetForm.append(resetLabel, resetInput, resetSubmit, resetCancel);
+        resetForm.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!resetForm.reportValidity()) return;
+          resetSubmit.disabled = true;
           try {
             await callApi('/api/system/users/' + encodeURIComponent(u.username),
-                          'PATCH', {password: next});
+                          'PATCH', {password: resetInput.value});
             status('adminUsersStatus', 'Password reset. Existing sessions revoked.');
-          } catch (e) { status('adminUsersStatus', failure(e), true); }
+            resetInput.value = '';
+            resetForm.hidden = true;
+          } catch (e) {
+            status('adminUsersStatus', 'Reset failed: ' + failure(e), true);
+          } finally {
+            resetSubmit.disabled = false;
+            resetInput.value = '';
+          }
+        });
+        buttons.append(action('Reset password', () => {
+          resetForm.hidden = !resetForm.hidden;
+          if (!resetForm.hidden) resetInput.focus();
+          else resetInput.value = '';
         }));
         buttons.append(action('Delete User', async () => {
           if (!window.confirm('Delete ' + u.username + '? Remove their sources first.')) return;
@@ -432,7 +457,7 @@
             status('adminUsersStatus', 'User removed.');
           } catch (e) { status('adminUsersStatus', failure(e), true); }
         }));
-        card.append(buttons);
+        card.append(buttons, resetForm);
       }
       root.append(card);
     }
