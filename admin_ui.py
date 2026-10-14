@@ -8,6 +8,8 @@ Secrets never appear in API responses, URLs, browser storage, or server logs.
 """
 import hmac
 import json
+import os
+import re
 import socket
 import secrets
 from urllib.parse import parse_qs
@@ -106,7 +108,16 @@ def require_admin(identity=Depends(authorize)):
     return identity
 
 
-GATE_LOGIN_COOKIE = "xtream_admin_login_nonce"
+# The gateway nonce also needs a distinct name on the same hostname,
+# because cookies are not scoped by TCP port.
+GATE_LOGIN_COOKIE = os.getenv(
+    "XTREAM_LOGIN_NONCE_COOKIE", "xtream_admin_login_nonce"
+)
+if not re.fullmatch(r"xtream_[a-z0-9_]{3,48}", GATE_LOGIN_COOKIE):
+    raise RuntimeError("Invalid XTREAM_LOGIN_NONCE_COOKIE")
+if GATE_LOGIN_COOKIE == admin_auth.COOKIE:
+    raise RuntimeError("Login nonce and session cookie must be distinct")
+
 
 
 def _gate_page(message: str, nonce: str, username: str = "owner"):
