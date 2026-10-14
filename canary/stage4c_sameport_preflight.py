@@ -7,9 +7,12 @@ Discovers the single source config file owning the production public vhost.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
+import socket
+import ssl
 import subprocess
 from pathlib import Path
 from urllib.error import HTTPError
@@ -149,7 +152,6 @@ def find_server_config(dump):
         raise ValueError("Public nginx vhost file not found")
     required = {
         "admin_location": r"location\s+\^~\s+/admin/",
-        "signin_location": r"location\s+\^~\s+/admin-signin/",
         "auth_request_gate": r"auth_request\s+/__xtream_admin_gate_check",
         "playback_root_location": r"location\s+/\s*\{",
     }
@@ -164,6 +166,51 @@ def find_server_config(dump):
     if PREFIX_CLAUSE.search(block) or "/canary/" in block:
         raise ValueError("Existing /canary/ routes detected; refuse to overwrite")
     return filename, resolved, block
+
+
+def verify_public_signin_https():
+    """Verify the real public vhost login route by SNI on local HTTPS :18450.
+
+    nginx -T shows physical include files separately, not expanded inline
+    inside their parent server. A login location from a server-level include
+    can therefore be absent from the selected vhost's text despite working
+    correctly. Verify the actual SNI/Host route rather than guessing which
+    include file owns it. No credentials, tokens or response bodies are logged.
+    """
+    context = ssl.create_default_context()
+    try:
+        with socket.create_connection(("127.0.0.1", 18450), timeout=8) as tcp:
+            with context.wrap_socket(tcp, server_hostname=DOMAIN) as tls:
+                tls.settimeout(8)
+                request = (
+                    "GET /admin-signin/ HTTP/1.1\\r\\n"
+                    f"Host: {DOMAIN}:18450\\r\\n"
+                    "Accept: text/html\\r\\n"
+                    "Connection: close\\r\\n\\r\\n"
+                ).replace("\\\\r", "\\r").replace("\\\\n", "\\n")
+                tls.sendall(request.encode("ascii"))
+                response = http.client.HTTPResponse(tls)
+                response.begin()
+                status = response.status
+                content_type = response.getheader("Content-Type", "")
+                set_cookies = response.getheaders()
+                body = response.read(131072)
+    except (OSError, ssl.SSLError, http.client.HTTPException) as exc:
+        raise ValueError("Public Safari sign-in HTTPS probe failed") from None
+    nonce_cookie = any(
+        key.lower() == "set-cookie" and
+        value.startswith("xtream_admin_login_nonce=")
+        for key, value in set_cookies
+    )
+    if (
+        status != 200
+        or not content_type.lower().startswith("text/html")
+        or b'action="/admin-signin/"' not in body
+        or b'name="nonce"' not in body
+        or not nonce_cookie
+    ):
+        raise ValueError("Public Safari sign-in response does not match secure Gateway")
+    return True
 
 
 def lookup_image(name):
@@ -193,6 +240,9 @@ def main():
         raise ValueError("Current production nginx config does not pass nginx -t")
     raw = command("nginx", "-T")
     filename, resolved, _block = find_server_config(raw)
+    # A physical include can define /admin-signin/ outside the source text
+    # of the vhost; verify the live authenticated HTTPS sign-in response.
+    verify_public_signin_https()
 
     admin_ip, admin_image = container_ip("xtream-vod-canary-admin")
     play_ip, play_image = container_ip("xtream-vod-canary-playback")
@@ -218,6 +268,7 @@ def main():
     check_http(play_ip, 8767, "/health", 200)
 
     # Socket is already in use by production on :18450; don't try to bind it.
+    print("PUBLIC_SIGNIN_HTTPS_PROBE=PASS")
     print("SAME_PORT_PREFLIGHT=PASS")
     print("NGINX_PRODUCTION_VHOST_FILE=" + str(filename))
     print("NGINX_REAL_FILE=" + str(resolved))
