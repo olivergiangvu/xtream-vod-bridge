@@ -106,7 +106,7 @@ class Stage4DTests(unittest.TestCase):
                 "worker_processes 1;\n"
                 f"pid {root / 'nginx.pid'};\n"
                 "events { worker_connections 64; }\n"
-                f"http {{ server {{ listen 127.0.0.1:18888;"
+                f"http {{ access_log off; server {{ listen 127.0.0.1:18888;"
                 f" include {root / 'routes.conf'}; }} }}\n",
                 encoding="utf-8",
             )
