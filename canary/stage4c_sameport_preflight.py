@@ -15,13 +15,98 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import build_opener, ProxyHandler
 
-from canary.stage4b_preflight import (
-    CANARY_NETWORK,
-    command,
-    container_ip,
-    local_lan,
-    server_blocks,
-)
+CANARY_NETWORK = "xtream-vod-canary_private_canary"
+
+
+def command(*args):
+    result = subprocess.run(args, capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        raise RuntimeError("Inspection command failed: " + str(args[0]))
+    return result.stdout
+
+
+def no_comments(line):
+    # Quoted hash characters must not terminate the directive.
+    quote = None
+    escaped = False
+    result = []
+    for char in line:
+        if escaped:
+            result.append(char)
+            escaped = False
+        elif char == "\\":
+            result.append(char)
+            escaped = True
+        elif char in "'\"":
+            if quote == char:
+                quote = None
+            elif quote is None:
+                quote = char
+            result.append(char)
+        elif char == "#" and quote is None:
+            break
+        else:
+            result.append(char)
+    return "".join(result)
+
+
+def server_blocks(text):
+    lines = text.splitlines()
+    starts = [i for i, v in enumerate(lines)
+              if re.match(r"^\s*server\s*\{", no_comments(v))]
+    blocks = []
+    for start in starts:
+        nesting = 0
+        for stop in range(start, len(lines)):
+            clean = no_comments(lines[stop])
+            nesting += clean.count("{") - clean.count("}")
+            if nesting == 0 and stop > start:
+                blocks.append("\n".join(lines[start:stop + 1]))
+                break
+        else:
+            raise ValueError("Unbalanced nginx server block")
+    return blocks
+
+
+def container_ip(name):
+    objects = json.loads(command("docker", "inspect", name))
+    if len(objects) != 1:
+        raise ValueError("Expected exactly one Canary container")
+    obj = objects[0]
+    if obj["State"].get("Health", {}).get("Status") != "healthy":
+        raise ValueError("Canary container not healthy: " + name)
+    networks = obj["NetworkSettings"]["Networks"]
+    if CANARY_NETWORK not in networks:
+        raise ValueError("Canary network changed: " + name)
+    ip = networks[CANARY_NETWORK].get("IPAddress")
+    if not ip or not ipaddress.ip_address(ip).is_private:
+        raise ValueError("Canary Docker IP missing")
+    return ip, obj["Config"]["Image"]
+
+
+def local_lan():
+    route = json.loads(command("ip", "-j", "-4", "route", "get", "1.1.1.1"))
+    if len(route) != 1:
+        raise ValueError("Ambiguous HomeDocker default route")
+    dev = route[0].get("dev")
+    ip = route[0].get("prefsrc", route[0].get("src"))
+    if not dev or not ip:
+        raise ValueError("Default route has no LAN IP/interface")
+    addresses = json.loads(command("ip", "-j", "-4", "addr", "show", "dev", dev))
+    cidrs = [
+        ipaddress.ip_interface(f"{a['local']}/{a['prefixlen']}")
+        for row in addresses
+        for a in row.get("addr_info", [])
+        if a.get("family") == "inet" and a.get("local") == ip
+    ]
+    if len(cidrs) != 1:
+        raise ValueError("Ambiguous HomeDocker LAN subnet")
+    if not any(ipaddress.ip_address(ip) in ipaddress.ip_network(n) for n in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"
+    )):
+        raise ValueError("HomeDocker network is not RFC1918 LAN")
+    return dev, ip, str(cidrs[0].network)
+
 
 DOMAIN = "olivergiangvu.asuscomm.com"
 EXPECTED_ADMIN_IMAGE = "homedocker/xtream-vod-canary-admin:0.5e-cookie-e153b327b49f"
