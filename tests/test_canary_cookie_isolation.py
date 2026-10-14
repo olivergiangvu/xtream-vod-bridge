@@ -14,14 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECK = (
     "import admin_auth, admin_ui; "
     "print('SESSION=' + admin_auth.COOKIE); "
-    "print('NONCE=' + admin_ui.GATE_LOGIN_COOKIE)"
+    "print('NONCE=' + admin_ui.GATE_LOGIN_COOKIE); "
+    "print('REFERRER=' + admin_ui.GATEWAY_REFERRER_POLICY); "
+    "print('META=' + ('content=\\\"' + admin_ui.GATEWAY_REFERRER_POLICY + '\\\"' "
+    "in admin_ui._gate_page('', 'testnonce')))"
 )
 
 
-def probe(session=None, nonce=None):
+def probe(session=None, nonce=None, policy=None):
     env = os.environ.copy()
     env.pop("XTREAM_SESSION_COOKIE", None)
     env.pop("XTREAM_LOGIN_NONCE_COOKIE", None)
+    env.pop("XTREAM_GATEWAY_REFERRER_POLICY", None)
+    if policy is not None:
+        env["XTREAM_GATEWAY_REFERRER_POLICY"] = policy
     if session is not None:
         env["XTREAM_SESSION_COOKIE"] = session
     if nonce is not None:
@@ -50,6 +56,22 @@ class CookiePortIsolation(unittest.TestCase):
         self.assertIn("NONCE=xtream_canary_login_nonce", result.stdout)
         self.assertNotIn("SESSION=xtream_admin_session\n", result.stdout)
         self.assertNotIn("NONCE=xtream_admin_login_nonce\n", result.stdout)
+
+    def test_canary_can_use_reviewed_safari_same_origin_policy(self):
+        result = probe(
+            "xtream_canary_admin_session", "xtream_canary_login_nonce",
+            "same-origin",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+        self.assertIn("REFERRER=same-origin", result.stdout)
+        self.assertIn("META=True", result.stdout)
+
+    def test_invalid_gateway_referrer_policy_fails_closed(self):
+        result = probe(
+            "xtream_canary_admin_session", "xtream_canary_login_nonce",
+            "unsafe-url",
+        )
+        self.assertNotEqual(result.returncode, 0)
 
     def test_invalid_or_colliding_names_fail_closed(self):
         for session, nonce in [
