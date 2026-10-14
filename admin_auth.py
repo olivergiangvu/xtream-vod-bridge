@@ -11,6 +11,7 @@ import getpass
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import sqlite3
 import sys
@@ -18,7 +19,18 @@ import time
 from urllib.parse import urlsplit
 import ops
 
-COOKIE = "xtream_admin_session"
+# Cookies are shared between ports on the same hostname. Stage 4 Canary
+# MUST use a different cookie name to avoid replacing the production :18450
+# Safari login when :18451 is opened on olivergiangvu.asuscomm.com.
+# Defaults preserve v0.4.x production behavior unchanged.
+def _session_cookie_name():
+    value = os.getenv("XTREAM_SESSION_COOKIE", "xtream_admin_session")
+    if not re.fullmatch(r"xtream_[a-z0-9_]{3,48}", value):
+        raise RuntimeError("Invalid XTREAM_SESSION_COOKIE")
+    return value
+
+
+COOKIE = _session_cookie_name()
 COOKIE_PATH = "/admin/"
 SESSION_SECONDS = 12 * 3600
 ITERATIONS = 600_000
