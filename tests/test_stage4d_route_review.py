@@ -82,6 +82,40 @@ class Stage4DTests(unittest.TestCase):
                 "172.30.0.3", "172.30.0.2",
             )
 
+    def test_real_repository_template_nginx_syntax_when_available(self):
+        import shutil
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        template_path = (Path(__file__).resolve().parents[1]
+                         / "canary/xtream-canary-18450.nginx.template")
+        template = template_path.read_text(encoding="utf-8")
+        _, routes, _ = review.render(
+            SOURCE, template, "172.30.0.3", "172.30.0.2"
+        )
+        self.assertEqual(routes.count("allow 192.168.50.0/24;"), 4)
+        self.assertEqual(routes.count("deny all;"), 4)
+        self.assertEqual(routes.count("internal;"), 1)
+        if not shutil.which("nginx"):
+            self.skipTest("nginx binary unavailable in CI")
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "routes.conf").write_text(routes, encoding="utf-8")
+            (root / "nginx.conf").write_text(
+                "worker_processes 1;\n"
+                f"pid {root / 'nginx.pid'};\n"
+                "events { worker_connections 64; }\n"
+                f"http {{ server {{ listen 127.0.0.1:18888;"
+                f" include {root / 'routes.conf'}; }} }}\n",
+                encoding="utf-8",
+            )
+            check = subprocess.run(
+                ["nginx", "-t", "-c", str(root / "nginx.conf"), "-p", td + "/"],
+                capture_output=True, text=True, timeout=10,
+            )
+            self.assertEqual(check.returncode, 0, check.stderr)
+
     def test_git_blob_sha_matches_documented_git_algorithm(self):
         self.assertEqual(
             review.git_blob_sha(b"hello\n"),
