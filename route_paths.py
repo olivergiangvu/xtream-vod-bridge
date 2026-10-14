@@ -6,7 +6,7 @@ Unsupported values fail closed, preventing auth/cookie path confusion.
 """
 import os
 
-PREFIX = os.getenv("XTREAM_URL_PREFIX", "").strip()
+PREFIX = os.getenv("XTREAM_URL_PREFIX", "")
 if PREFIX not in ("", "/canary"):
     raise RuntimeError("Unsupported XTREAM_URL_PREFIX (expected empty or /canary)")
 
