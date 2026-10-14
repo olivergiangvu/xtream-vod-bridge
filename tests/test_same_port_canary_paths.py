@@ -122,7 +122,8 @@ with tempfile.TemporaryDirectory(prefix="stage5-canary-") as td:
                 response = client.post(
                     "/gateway/", data={"nonce":nonce,"username":"owner",
                                         "password":"TotallyFakePassword14"},
-                    headers={"origin": os.environ["ADMIN_PUBLIC_ORIGIN"],
+                    headers={"cookie": "xtream_canary_login_nonce=" + nonce,
+                             "origin": os.environ["ADMIN_PUBLIC_ORIGIN"],
                              "referer":os.environ["ADMIN_PUBLIC_ORIGIN"]+"/canary/admin-signin/",
                              "host":"olivergiangvu.asuscomm.com:18450",
                              "x-forwarded-proto":"https",
