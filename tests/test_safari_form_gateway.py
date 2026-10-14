@@ -238,13 +238,13 @@ class SafariFormGatewayTests(unittest.TestCase):
         click = js.split("$('logout').addEventListener('click', async () => {", 1)[1]
         self.assertIn("api('/api/auth/logout', 'POST')", click)
         self.assertIn("result.authenticated !== false", click)
-        self.assertIn("window.location.replace('/admin-signin/')", click)
+        self.assertIn("window.location.replace(signinPagePath)", click)
         self.assertLess(
             click.index("result.authenticated !== false"),
-            click.index("window.location.replace('/admin-signin/')"),
+            click.index("window.location.replace(signinPagePath)"),
         )
         # The direct loopback/SSH UI retains its legacy form.
-        self.assertIn("window.location.pathname.startsWith('/admin/')", click)
+        self.assertIn("isProxiedAdminPage()", click)
         self.assertIn("Lock failed:", click)
 
     def test_login_rejects_forged_origin_nonce_and_password(self):
