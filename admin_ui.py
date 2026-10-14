@@ -35,6 +35,14 @@ import personal_manifests
 ROOT = Path(__file__).resolve().parent / "admin"
 BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
 
+# Safari's native HTML POST is already proven on HomeDocker with same-origin.
+# Keep the repo default behavior; opt into the reviewed policy for Canary.
+GATEWAY_REFERRER_POLICY = os.getenv(
+    "XTREAM_GATEWAY_REFERRER_POLICY", "strict-origin-when-cross-origin"
+)
+if GATEWAY_REFERRER_POLICY not in ("same-origin", "strict-origin-when-cross-origin"):
+    raise RuntimeError("Invalid XTREAM_GATEWAY_REFERRER_POLICY")
+
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -60,7 +68,7 @@ async def security_headers(request, call_next):
     # Native HTML POST needs a real Origin (no-referrer sets it to "null").
     # Keep the restrictive policy on every other Admin response.
     response.headers["Referrer-Policy"] = (
-        "strict-origin-when-cross-origin" if request.url.path.startswith("/gateway/")
+        GATEWAY_REFERRER_POLICY if request.url.path.startswith("/gateway/")
         else "no-referrer"
     )
     response.headers["X-Frame-Options"] = "DENY"
@@ -131,7 +139,7 @@ def _gate_page(message: str, nonce: str, username: str = "owner"):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b1625">
-<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="referrer" content="{GATEWAY_REFERRER_POLICY}">
 <title>Sign in · Xtream VOD Bridge</title>
 <style>
 :root{{color-scheme:dark;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}}
