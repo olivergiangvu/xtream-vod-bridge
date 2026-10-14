@@ -266,6 +266,47 @@
       top.append(el('span', 'soft-pill', m.enabled ? 'Active' : 'Disabled'));
       card.append(top);
       const buttons = el('div', 'workspace-actions');
+      const editPanel = el('form', 'inline-reset');
+      editPanel.hidden = true;
+      const nameLabel = el('label', '', 'Addon name');
+      const nameInput = el('input');
+      nameInput.type = 'text'; nameInput.required = true; nameInput.maxLength = 64;
+      nameInput.value = m.name;
+      const selectionLabel = el('label', '', 'Select your enabled sources');
+      const chooser = el('div', 'source-choices');
+      for (const source of sources.filter(x => x.enabled)) {
+        const label = el('label', 'checkbox-line');
+        const check = el('input'); check.type = 'checkbox';
+        check.value = source.source_id;
+        check.checked = (m.sources || []).includes(source.source_id);
+        label.append(check, document.createTextNode(' ' + source.name));
+        chooser.append(label);
+      }
+      const commit = el('button', 'primary', 'Save addon');
+      commit.type = 'submit';
+      const dismiss = action('Cancel', () => { editPanel.hidden = true; });
+      editPanel.append(nameLabel, nameInput, selectionLabel, chooser, commit, dismiss);
+      editPanel.addEventListener('submit', async event => {
+        event.preventDefault();
+        const picked = Array.from(chooser.querySelectorAll('input:checked'), n => n.value);
+        if (!picked.length) {
+          status('personalManifestStatus', 'Choose at least one enabled source.', true);
+          return;
+        }
+        commit.disabled = true;
+        try {
+          await callApi('/api/my/manifests/' + m.manifest_id,
+                        'PATCH', {name: nameInput.value.trim(), source_ids: picked});
+          await refreshManifests();
+          status('personalManifestStatus', 'Manifest sources updated.');
+        } catch (e) {
+          status('personalManifestStatus', 'Update failed: ' + failure(e), true);
+        } finally { commit.disabled = false; }
+      });
+      buttons.append(action('Edit sources', () => {
+        editPanel.hidden = !editPanel.hidden;
+        if (!editPanel.hidden) nameInput.focus();
+      }));
       buttons.append(action('Rotate URL', async () => {
         if (!window.confirm('Rotate this addon URL? The previous manifest link and its playback access will stop working.')) return;
         try {
@@ -293,7 +334,7 @@
           status('personalManifestStatus', 'Manifest deleted.');
         } catch (e) { status('personalManifestStatus', 'Delete failed: ' + failure(e), true); }
       }));
-      card.append(buttons);
+      card.append(buttons, editPanel);
       root.append(card);
     }
   }
