@@ -116,6 +116,95 @@ class Stage4DTests(unittest.TestCase):
             )
             self.assertEqual(check.returncode, 0, check.stderr)
 
+    def test_dormant_loopback_port_binding_is_not_a_live_publication(self):
+        from unittest.mock import patch
+        # Exact shape reported by HomeDocker Docker inspect on 2026-10-14.
+        # Docker PortBindings contain an old loopback-only proposal,
+        # but effective NetworkSettings.Ports are null and docker port empty.
+        cases = [
+            ("xtream-vod-canary-admin", "8768/tcp", "18770"),
+            ("xtream-vod-canary-playback", "8767/tcp", "18769"),
+        ]
+        for name, exposed_port, host_port in cases:
+            with self.subTest(container=name):
+                obj = {
+                    "HostConfig": {
+                        "PortBindings": {
+                            exposed_port: [
+                                {"HostIp": "127.0.0.1", "HostPort": host_port}
+                            ]
+                        }
+                    },
+                    "NetworkSettings": {
+                        "Ports": {"8767/tcp": None, "8768/tcp": None}
+                    },
+                }
+                with patch.object(review, "run", return_value="") as command:
+                    self.assertEqual(
+                        review.check_canary_port_isolation(obj, name), 1
+                    )
+                command.assert_called_once_with("docker", "port", name)
+
+    def test_active_published_port_must_fail_even_if_loopback(self):
+        from unittest.mock import patch
+        obj = {
+            "HostConfig": {
+                "PortBindings": {
+                    "8768/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18770"}]
+                }
+            },
+            "NetworkSettings": {
+                "Ports": {
+                    "8768/tcp": [
+                        {"HostIp": "127.0.0.1", "HostPort": "18770"}
+                    ]
+                }
+            },
+        }
+        with patch.object(review, "run", return_value=""):
+            with self.assertRaisesRegex(ValueError, "effective host port"):
+                review.check_canary_port_isolation(obj, "xtream-vod-canary-admin")
+
+    def test_docker_port_output_detects_publication_even_with_null_ports(self):
+        from unittest.mock import patch
+        obj = {
+            "HostConfig": {"PortBindings": {}},
+            "NetworkSettings": {"Ports": {"8768/tcp": None}},
+        }
+        with patch.object(
+            review, "run", return_value="8768/tcp -> 127.0.0.1:18770\n"
+        ):
+            with self.assertRaisesRegex(ValueError, "docker port reports"):
+                review.check_canary_port_isolation(obj, "xtream-vod-canary-admin")
+
+    def test_dormant_nonloopback_binding_is_unsafe_if_recreated(self):
+        from unittest.mock import patch
+        for host_ip in ("0.0.0.0", "", "192.168.50.153", "::"):
+            with self.subTest(ip=host_ip):
+                obj = {
+                    "HostConfig": {"PortBindings": {
+                        "8768/tcp": [{"HostIp": host_ip, "HostPort": "18770"}]
+                    }},
+                    "NetworkSettings": {"Ports": {"8768/tcp": None}},
+                }
+                with patch.object(review, "run", return_value=""):
+                    with self.assertRaisesRegex(ValueError, "unsafe host bind"):
+                        review.check_canary_port_isolation(
+                            obj, "xtream-vod-canary-admin"
+                        )
+
+    def test_no_ports_present_is_safe(self):
+        from unittest.mock import patch
+        obj = {
+            "HostConfig": {"PortBindings": None},
+            "NetworkSettings": {"Ports": {"8767/tcp": None, "8768/tcp": None}},
+        }
+        with patch.object(review, "run", return_value=""):
+            self.assertEqual(
+                review.check_canary_port_isolation(obj, "xtream-vod-canary-admin"),
+                0,
+            )
+
     def test_git_blob_sha_matches_documented_git_algorithm(self):
         self.assertEqual(
             review.git_blob_sha(b"hello\n"),
