@@ -62,6 +62,75 @@ class Stage5A2Tests(unittest.TestCase):
         self.assertNotIn("18769", stage.STAGE4A_OVERRIDE)
         self.assertNotIn("18770", stage.STAGE4A_OVERRIDE)
 
+    def test_light_build_resource_gate_with_55pct_busy(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(stage.os, "cpu_count", return_value=2), \
+             patch.object(stage, "shell", return_value="/tmp"), \
+             patch.object(stage, "cpu_ticks", side_effect=[(10000, 4000),
+                                                            (12000, 4900)]), \
+             patch.object(stage, "psi", side_effect=[44.0, 41.0]), \
+             patch.object(stage, "memory_available_bytes",
+                          return_value=2 * 1024**3), \
+             patch.object(stage.shutil, "disk_usage",
+                          return_value=SimpleNamespace(free=4 * 1024**3)), \
+             patch.object(stage.time, "sleep") as sleepy:
+            self.assertEqual(stage.low_impact_build_gate(), 55.0)
+            sleepy.assert_called_once_with(10)
+
+    def test_light_build_rejects_high_cpu_utilization(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(stage.os, "cpu_count", return_value=2), \
+             patch.object(stage, "shell", return_value="/tmp"), \
+             patch.object(stage, "cpu_ticks", side_effect=[(10000, 4000),
+                                                            (12000, 4400)]), \
+             patch.object(stage, "psi", side_effect=[25.0, 27.0]), \
+             patch.object(stage, "memory_available_bytes",
+                          return_value=2 * 1024**3), \
+             patch.object(stage.shutil, "disk_usage",
+                          return_value=SimpleNamespace(free=4 * 1024**3)), \
+             patch.object(stage.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, "CPU_HEADROOM"):
+                stage.low_impact_build_gate()
+
+    def test_light_build_rejects_extreme_psi(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with patch.object(stage.os, "cpu_count", return_value=2), \
+             patch.object(stage, "shell", return_value="/tmp"), \
+             patch.object(stage, "cpu_ticks", side_effect=[(10000, 4000),
+                                                            (12000, 4900)]), \
+             patch.object(stage, "psi", side_effect=[25.0, 71.0]), \
+             patch.object(stage, "memory_available_bytes",
+                          return_value=2 * 1024**3), \
+             patch.object(stage.shutil, "disk_usage",
+                          return_value=SimpleNamespace(free=4 * 1024**3)), \
+             patch.object(stage.time, "sleep"):
+            with self.assertRaisesRegex(ValueError, "EXTREME_CPU_PRESSURE"):
+                stage.low_impact_build_gate()
+
+    def test_light_build_rejects_insufficient_ram_or_disk(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        for memory, disk, error in (
+            (512 * 1024**2, 4 * 1024**3, "RAM_HEADROOM"),
+            (2 * 1024**3, 1024**3, "DOCKER_DISK"),
+        ):
+            with self.subTest(error=error), \
+                 patch.object(stage.os, "cpu_count", return_value=2), \
+                 patch.object(stage, "shell", return_value="/tmp"), \
+                 patch.object(stage, "cpu_ticks", side_effect=[(10000, 4000),
+                                                                (12000, 4900)]), \
+                 patch.object(stage, "psi", side_effect=[25.0, 27.0]), \
+                 patch.object(stage, "memory_available_bytes",
+                              return_value=memory), \
+                 patch.object(stage.shutil, "disk_usage",
+                              return_value=SimpleNamespace(free=disk)), \
+                 patch.object(stage.time, "sleep"):
+                with self.assertRaisesRegex(ValueError, error):
+                    stage.low_impact_build_gate()
+
     def test_docker_build_network_off_and_no_pull(self):
         import ast
         import inspect
