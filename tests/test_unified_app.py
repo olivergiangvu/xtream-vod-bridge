@@ -29,7 +29,8 @@ class UnifiedAsyncTests(unittest.IsolatedAsyncioTestCase):
         paths = [route.path for route in unified.application.router.routes]
         self.assertIn("/a/{token}/manifest.json", paths)
         self.assertIn("/health", paths)
-        self.assertEqual(paths[-1], "/")
+        # Starlette normalizes Mount("/") to an empty path string.
+        self.assertEqual(paths[-1], "")
 
         page = await self.request("/")
         self.assertEqual(page.status_code, 200)
