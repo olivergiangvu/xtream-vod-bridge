@@ -8,6 +8,9 @@ services:
     pull_policy: never
     container_name: xtream-vod-unified-canary
     restart: "no"
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 64
     env_file:
       - ${CANARY_DIR:?CANARY_DIR must be defined}/secrets/canary.env
     environment:
@@ -20,7 +23,7 @@ services:
       ADMIN_PUBLIC_ORIGIN: https://olivergiangvu.asuscomm.com:18450
       PUBLIC_BASE_URL: https://olivergiangvu.asuscomm.com:18450/canary
     volumes:
-      - ${CANARY_DIR}/data:/data
+      - ${CANARY_DIR}/unified-data:/data
     networks:
       - unified_private
     security_opt:
