@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python source
-        run: python -m compileall -q app.py admin_ui.py admin_auth.py ops.py scripts tests
+        run: python -m compileall -q app.py unified_app.py admin_ui.py admin_auth.py ops.py scripts tests
       - name: Check browser JavaScript syntax
         run: |
           node --check admin/assets/app.js
