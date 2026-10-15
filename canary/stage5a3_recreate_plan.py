@@ -201,7 +201,7 @@ def check_live():
                         if not ipaddress.ip_address(binding["HostIp"]).is_loopback:
                             stop("Canary dormant binding is not loopback")
                     except (KeyError, ValueError, TypeError) as exc:
-                        stop("Malformed Canary dormant port binding") from exc
+                        raise ValueError("Malformed Canary dormant port binding") from exc
     nets = json.loads(run("docker", "network", "inspect", NETWORK))
     if len(nets) != 1 or nets[0].get("Internal") is not True:
         stop("Canary live Docker network not internal")
