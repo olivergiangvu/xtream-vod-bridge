@@ -38,6 +38,7 @@ jobs:
           python -m py_compile canary/stage4e2_ports_dryrun.py
           python -m py_compile canary/stage4f_apply_compose_ports.py
           python -m py_compile canary/stage5a_readonly_preflight.py
+          python -m py_compile canary/stage5a2_build_only.py
           bash -n canary/upgrade_same_port_containers.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
