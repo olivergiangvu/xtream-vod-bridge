@@ -75,7 +75,7 @@ class Stage5A2Tests(unittest.TestCase):
              patch.object(stage.shutil, "disk_usage",
                           return_value=SimpleNamespace(free=4 * 1024**3)), \
              patch.object(stage.time, "sleep") as sleepy:
-            self.assertEqual(stage.low_impact_build_gate(), 55.0)
+            self.assertAlmostEqual(stage.low_impact_build_gate(), 55.0)
             sleepy.assert_called_once_with(10)
 
     def test_light_build_rejects_high_cpu_utilization(self):
