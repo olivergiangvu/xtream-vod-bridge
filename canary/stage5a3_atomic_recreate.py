@@ -324,8 +324,14 @@ def rollback(plan, original, original_ids, *, recreate_attempted):
             except Exception:
                 errors.append("CONTAINER_RESTORE_FAILED_" + service)
     try:
-        verify_canary(plan, "xtream-vod-canary-playback", plan.PLAY_IMAGE)
-        verify_canary(plan, "xtream-vod-canary-admin", plan.OLD_ADMIN)
+        if recreate_attempted:
+            verify_canary(plan, "xtream-vod-canary-playback", plan.PLAY_IMAGE)
+            verify_canary(plan, "xtream-vod-canary-admin", plan.OLD_ADMIN)
+        else:
+            current_ids = plan.check_live()
+            for name in ("xtream-vod-canary-playback", "xtream-vod-canary-admin"):
+                if current_ids[name] != original_ids[name]:
+                    stop("Original Canary identity changed during file-only rollback")
         verify_unchanged(plan, original_ids)
     except Exception:
         errors.append("POST_ROLLBACK_HEALTH_OR_PRODUCTION_AUDIT_FAILED")
