@@ -126,6 +126,52 @@ class Stage5A3AtomicTests(unittest.TestCase):
                 self.assertEqual(up.call_count, 2)
                 self.assertGreaterEqual(check.call_count, 4)
 
+    def test_file_only_rollback_checks_original_dormant_binding_baseline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "ui-override.yaml"
+            old = b"old-canary-override\n"
+            target.write_bytes(b"new-canary-override\n")
+            orig_ids = {
+                "xtream-vod-canary-playback": "old-play",
+                "xtream-vod-canary-admin": "old-admin",
+            }
+            fake = SimpleNamespace(
+                OVERRIDE=target,
+                OVERRIDE_SHA=hashlib.sha256(old).hexdigest(),
+                PLAY_IMAGE=plan.PLAY_IMAGE,
+                OLD_ADMIN=plan.OLD_ADMIN,
+                check_live=lambda: dict(orig_ids),
+            )
+            with patch.object(stage, "compose_up") as up, \
+                 patch.object(stage, "verify_canary") as verify, \
+                 patch.object(stage, "verify_unchanged"):
+                self.assertTrue(stage.rollback(
+                    fake, old, orig_ids, recreate_attempted=False
+                ))
+                up.assert_not_called()
+                verify.assert_not_called()
+                self.assertEqual(target.read_bytes(), old)
+
+    def test_failed_override_restore_blocks_recreate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "ui-override.yaml"
+            old = b"old-canary-override\n"
+            target.write_bytes(b"new-canary-override\n")
+            fake = SimpleNamespace(
+                OVERRIDE=target,
+                OVERRIDE_SHA=hashlib.sha256(old).hexdigest(),
+                PLAY_IMAGE=plan.PLAY_IMAGE,
+                OLD_ADMIN=plan.OLD_ADMIN,
+            )
+            with patch.object(stage, "atomic_override",
+                              side_effect=OSError("no space")), \
+                 patch.object(stage, "compose_up") as up, \
+                 patch.object(stage, "verify_canary") as verify:
+                self.assertFalse(stage.rollback(
+                    fake, old, {}, recreate_attempted=True
+                ))
+                up.assert_not_called()
+                verify.assert_not_called()
     def test_rollback_failure_never_claims_verified(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "ui-override.yaml"
