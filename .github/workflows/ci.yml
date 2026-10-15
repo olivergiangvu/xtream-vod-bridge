@@ -42,6 +42,7 @@ jobs:
           python -m py_compile canary/stage5a3_recreate_plan.py
           python -m py_compile canary/stage5a3_atomic_recreate.py
           python -m py_compile canary/stage6_unified_image_build.py
+          python -m py_compile canary/stage6_unified_launch_plan.py
           bash -n canary/upgrade_same_port_containers.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
