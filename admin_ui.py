@@ -34,7 +34,11 @@ import personal_manifests
 import route_paths
 
 ROOT = Path(__file__).resolve().parent / "admin"
-BRIDGE_HEALTH = "http://xtream-vod-bridge:8767/health"
+BRIDGE_HEALTH = (
+    "http://127.0.0.1:8767/health"
+    if os.getenv("XTREAM_UNIFIED_MODE") == "1"
+    else "http://xtream-vod-bridge:8767/health"
+)
 
 # Safari's native HTML POST is already proven on HomeDocker with same-origin.
 # Keep the repo default behavior; opt into the reviewed policy for Canary.
