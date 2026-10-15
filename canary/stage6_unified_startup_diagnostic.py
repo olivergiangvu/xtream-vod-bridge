@@ -216,6 +216,22 @@ def safe_diag(logtext: str):
             categories.append(match.group(1))
     print("TRACEBACK_FRAMES_LAST_8=" + (",".join(frames[-8:]) or "NONE"), flush=True)
     print("EXCEPTION_TYPES=" + (",".join(categories[-5:]) or "NONE"), flush=True)
+    # Report only hardcoded categories; never echo arbitrary exception messages.
+    patterns = {
+        "MISSING_PYTHON_MODULE": r"No module named",
+        "SQLITE_DATABASE_READONLY": r"attempt to write a readonly database",
+        "SQLITE_DATABASE_OPEN_FAILED": r"unable to open database file",
+        "SQLITE_SCHEMA_MISSING": r"no such table:",
+        "PERMISSION_DENIED": r"Permission denied",
+        "MISSING_OR_PLACEHOLDER_CONFIG": r"Missing/placeholder configuration",
+        "PORT_BIND_FAILED": r"address already in use",
+        "ROOT_FS_READONLY": r"Read-only file system",
+        "APP_IMPORT_FAILED": r"Error loading ASGI app",
+        "STARTUP_FAILED": r"Application startup failed",
+    }
+    codes = [code for code, pattern in patterns.items()
+             if re.search(pattern, logtext, re.IGNORECASE)]
+    print("ERROR_CLASSIFICATION=" + (",".join(codes) or "UNCLASSIFIED"), flush=True)
     print("TRACEBACK_MESSAGES_OR_ENV_VALUES_PRINTED=NO", flush=True)
 
 
