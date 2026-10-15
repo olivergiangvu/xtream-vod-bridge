@@ -305,15 +305,19 @@ def verify_unchanged(plan, original_ids):
 def rollback(plan, original, original_ids, *, recreate_attempted):
     print("ROLLBACK_STAGE5A3_STARTED=TRUE", flush=True)
     errors = []
+    override_restored = False
     try:
         metadata = plan.OVERRIDE.stat()
         atomic_override(plan.OVERRIDE, original, metadata)
         if sha256(plan.OVERRIDE.read_bytes()) != plan.OVERRIDE_SHA:
             stop("Canary override restoration SHA mismatch")
+        override_restored = True
         print("ROLLBACK_OVERRIDE_BYTES=VERIFIED", flush=True)
     except Exception:
         errors.append("OVERRIDE_RESTORE_FAILED")
-    if recreate_attempted:
+    if recreate_attempted and not override_restored:
+        errors.append("RECREATE_ROLLBACK_BLOCKED_UNVERIFIED_OVERRIDE")
+    if recreate_attempted and override_restored:
         for service in ("xtream-vod-bridge", "xtream-vod-admin"):
             try:
                 compose_up(plan, service)
@@ -324,6 +328,8 @@ def rollback(plan, original, original_ids, *, recreate_attempted):
             except Exception:
                 errors.append("CONTAINER_RESTORE_FAILED_" + service)
     try:
+        if not override_restored:
+            stop("Override file not restored; do not claim recovery")
         if recreate_attempted:
             verify_canary(plan, "xtream-vod-canary-playback", plan.PLAY_IMAGE)
             verify_canary(plan, "xtream-vod-canary-admin", plan.OLD_ADMIN)
