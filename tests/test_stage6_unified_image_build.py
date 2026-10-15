@@ -41,7 +41,7 @@ class Stage6SourceAndBuildTests(unittest.TestCase):
             if ln.strip() and not ln.lstrip().startswith("#")
         ]
         self.assertEqual(commands[0], "FROM " + stage.BASE_IMAGE)
-        self.assertIn("COPY unified_app.py admin_ui.py /srv/", commands)
+        self.assertIn("COPY --chmod=0644 unified_app.py admin_ui.py /srv/", commands)
         self.assertFalse(any(ln.startswith("RUN ") for ln in commands))
         self.assertFalse(any(ln.startswith("ADD ") for ln in commands))
         self.assertTrue(any("unified_app:application" in ln for ln in commands))
