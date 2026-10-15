@@ -40,6 +40,7 @@ jobs:
           python -m py_compile canary/stage5a_readonly_preflight.py
           python -m py_compile canary/stage5a2_build_only.py
           python -m py_compile canary/stage5a3_recreate_plan.py
+          python -m py_compile canary/stage5a3_atomic_recreate.py
           bash -n canary/upgrade_same_port_containers.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
