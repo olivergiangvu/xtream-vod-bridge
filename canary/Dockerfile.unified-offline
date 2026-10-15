@@ -1,0 +1,8 @@
+# Lightweight no-RUN/no-pull build for HomeDocker Stage M2/M3.
+# Uses an existing locally verified 0.5g image; copies only reviewed source.
+# Independent reproducible stable build is Dockerfile.unified at repository root.
+FROM homedocker/xtream-vod-canary-admin:0.5g-prefix-206cf27063b8
+ENV XTREAM_UNIFIED_MODE=1
+COPY unified_app.py admin_ui.py /srv/
+EXPOSE 8767
+CMD ["uvicorn", "unified_app:application", "--host", "0.0.0.0", "--port", "8767", "--no-access-log"]
