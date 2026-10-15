@@ -3,6 +3,7 @@
 # Independent reproducible stable build is Dockerfile.unified at repository root.
 FROM homedocker/xtream-vod-canary-admin:0.5g-prefix-206cf27063b8
 ENV XTREAM_UNIFIED_MODE=1
-COPY unified_app.py admin_ui.py /srv/
+# Explicitly readable by the existing non-root USER 10001:10001.
+COPY --chmod=0644 unified_app.py admin_ui.py /srv/
 EXPOSE 8767
 CMD ["uvicorn", "unified_app:application", "--host", "0.0.0.0", "--port", "8767", "--no-access-log"]
