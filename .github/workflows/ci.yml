@@ -46,6 +46,7 @@ jobs:
           python -m py_compile canary/stage6_unified_launch_apply.py
           python -m py_compile canary/stage6_unified_startup_diagnostic.py
           python -m py_compile canary/stage6_unified_permission_fix_build.py
+          python -m py_compile canary/stage6_unified_permfix_runtime_verify.py
           bash -n canary/upgrade_same_port_containers.sh
       - name: Run no-network browser JS smoke
         run: node tests/ui_workspace_smoke.js
