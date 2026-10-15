@@ -95,6 +95,69 @@ def check_psi():
     return start, end
 
 
+def cpu_ticks():
+    """Cumulative CPU time across all logical CPUs; iowait counts as idle."""
+    row = Path("/proc/stat").read_text().splitlines()[0].split()
+    if not row or row[0] != "cpu" or len(row) < 9:
+        stop("System CPU accounting unavailable")
+    values = [int(value) for value in row[1:9]]
+    return sum(values), values[3] + values[4]
+
+
+def memory_available_bytes():
+    fields = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            fields["available_kib"] = int(line.split()[1])
+            break
+    if "available_kib" not in fields:
+        stop("Memory headroom information unavailable")
+    return fields["available_kib"] * 1024
+
+
+def low_impact_build_gate():
+    """Separate narrow exception for FROM + COPY only, never a recreate gate.
+
+    This measures actual 10-second host utilization and memory/disk headroom,
+    rather than waiting indefinitely for the 30% CPU PSI heuristic. BuildKit
+    work remains in Docker daemon, not CPU-limited by nice of the CLI.
+    """
+    if os.cpu_count() != 2:
+        stop("Expected 2 logical CPUs; re-review hardware before build")
+    docker_root = shell("docker", "info", "--format", "{{.DockerRootDir}}").strip()
+    root = Path(docker_root)
+    if not root.is_absolute() or not root.is_dir():
+        stop("Docker data root unavailable")
+    total0, idle0 = cpu_ticks()
+    psi0 = psi()
+    time.sleep(10)
+    total1, idle1 = cpu_ticks()
+    psi1 = psi()
+    delta = total1 - total0
+    if delta <= 0:
+        stop("Host CPU accounting did not advance")
+    utilization = 100 * (1 - (idle1 - idle0) / delta)
+    mem = memory_available_bytes()
+    disk = shutil.disk_usage(root).free
+    print("BUILD_ONLY_HOST_CPU_UTILIZATION_10S=" + f"{utilization:.2f}%")
+    print("BUILD_ONLY_CPU_PSI_START=" +
+          (f"{psi0:.2f}" if psi0 is not None else "UNKNOWN"))
+    print("BUILD_ONLY_CPU_PSI_END=" +
+          (f"{psi1:.2f}" if psi1 is not None else "UNKNOWN"))
+    print("BUILD_ONLY_MEM_AVAILABLE_MIB=" + str(mem // 1048576))
+    print("BUILD_ONLY_DOCKER_DISK_FREE_MIB=" + str(disk // 1048576))
+    if utilization >= 75:
+        stop("BUILD_ONLY_HOST_CPU_HEADROOM_NOT_READY (>=75% busy)")
+    if psi0 is None or psi1 is None or max(psi0, psi1) >= 70:
+        stop("BUILD_ONLY_EXTREME_CPU_PRESSURE_OR_UNKNOWN")
+    if mem < 1024 * 1048576:
+        stop("BUILD_ONLY_RAM_HEADROOM_NOT_READY (<1024MiB)")
+    if disk < 2048 * 1048576:
+        stop("BUILD_ONLY_DOCKER_DISK_NOT_READY (<2048MiB)")
+    print("BUILD_ONLY_RESOURCE_GATE=PASS")
+    return utilization
+
+
 def verify_baseline():
     for path, expected in PINNED_SHA.items():
         if not path.is_file() or path.is_symlink():
@@ -214,17 +277,19 @@ def build_image(directory):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--plan", action="store_true")
-    parser.add_argument("--build", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--plan", action="store_true")
+    modes.add_argument("--build", action="store_true")
+    modes.add_argument("--plan-light", action="store_true")
+    modes.add_argument("--build-light", action="store_true")
     parser.add_argument("--approval", default="")
     args = parser.parse_args()
-    if args.build and args.plan:
-        stop("Use either --plan or --build")
-    if args.build and args.approval != NEW_ADMIN:
+    building = args.build or args.build_light
+    if building and args.approval != NEW_ADMIN:
         stop("Explicit approval of exact Canary candidate image required")
     if os.geteuid() != 0:
         stop("Run with sudo (read-only plan or approved isolated build)")
-    if args.build and shell("docker", "image", "ls", "-q", NEW_ADMIN).strip():
+    if building and shell("docker", "image", "ls", "-q", NEW_ADMIN).strip():
         stop("Candidate image tag already exists; do not overwrite")
     before = verify_baseline()
 
@@ -236,17 +301,23 @@ def main():
         print("STAGE5A2_LOCAL_ROLLBACK_IMAGES=PASS")
         print("STAGE5A2_COMPOSE_ISOLATION_AND_HEALTH=PASS")
         print("STAGE5A2_CANDIDATE_TAG=" + NEW_ADMIN)
-        if args.build:
-            first, last = check_psi()
-            print("CPU_BUILD_GATE_FIRST=" + f"{first:.2f}")
-            print("CPU_BUILD_GATE_LAST=" + f"{last:.2f}")
-            # Catch drift while downloading sources.
+        if building or args.plan_light:
+            if args.build:
+                first, last = check_psi()
+                print("CPU_BUILD_GATE_FIRST=" + f"{first:.2f}")
+                print("CPU_BUILD_GATE_LAST=" + f"{last:.2f}")
+            else:
+                low_impact_build_gate()
+            # Catch runtime and SHA drift while downloading sources.
             if verify_baseline() != before:
                 stop("Container identity changed before build")
-            build_image(path)
-            if verify_baseline() != before:
-                stop("Container identity changed during build")
-            print("STAGE5A2_ADMIN_IMAGE_ONLY_BUILD=PASS")
+            if building:
+                build_image(path)
+                if verify_baseline() != before:
+                    stop("Container identity changed during build")
+                print("STAGE5A2_ADMIN_IMAGE_ONLY_BUILD=PASS")
+            else:
+                print("STAGE5A2_MODE=PLAN_LIGHT_ONLY")
         else:
             print("STAGE5A2_MODE=PLAN_ONLY")
     print("CANARY_COMPOSE_OR_CONTAINERS_CHANGED=NO")
@@ -254,7 +325,7 @@ def main():
     print("NGINX_OR_FIREWALL_CHANGED=NO")
     print("NEXT=" + (
         "REVIEW_CANARY_RECREATE_ROLLBACK_PROCEDURE"
-        if args.build else "AWAIT_SEPARATE_APPROVAL_FOR_LOW_RISK_IMAGE_BUILD"
+        if building else "AWAIT_SEPARATE_APPROVAL_FOR_IMAGE_ONLY_BUILD"
     ))
 
 
