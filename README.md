@@ -1,5 +1,7 @@
 # Xtream VOD Unified v0.6.0 — HomeDocker
 
+**Official GitHub Release:** [v0.6.0 — HomeDocker Stable](https://github.com/olivergiangvu/xtream-vod-bridge/releases/tag/v0.6.0), published 16 October 2026. The release is source-only; the production container remains pinned to the previously accepted local image SHA.
+
 **Status: operationally accepted on HomeDocker (16 October 2026).** Single-container Unified production, protected Safari sign-in, Owner/User Web UI, HTTPS legacy addon manifest and existing playback have been verified. This is not an independent security certification or a guarantee of portability to new hardware.
 
 This replaces the original v0.3–v0.5 overview, preserved in [historical README](docs/archive/README-pre-v0.6.md). The repository root `compose.yaml` is now a **safe Unified v0.6 reference**, pinned to the accepted image SHA. It intentionally requires an untracked `production.env` and an already restored Docker image/external volume; `docker compose up` from a fresh clone must not be treated as a turnkey deployment. Use the private canonical Compose deployed on HomeDocker.

@@ -24,3 +24,10 @@
 - Consolidated development history into merged source PR #45; former development PR #44 closed unmerged after consolidation. `main` and `stable/v0.6.0` pointed at source commit `0e8f4d7ab45923a3395043512d0cf63ce1bca6dc` when source release was cut.
 - CI/CodeQL checks passed; legacy TLS preflight now requires TLS 1.2+.
 - **No manual backup requested for closeout**: existing recurring encrypted restic/OneDrive backup remains responsible for capturing post-cleanup rollback artifacts at its next scheduled run. Previously verified snapshot `4cee1ca2` predates those artifacts. A new remote snapshot and complete new-hardware DR restore are **not** claimed as verified.
+
+### Official GitHub publication (2026-10-16)
+
+- Published [GitHub Release v0.6.0](https://github.com/olivergiangvu/xtream-vod-bridge/releases/tag/v0.6.0), source-only, tag points at commit `bc2ba4137d7ceb4fca176e5b114a37f0ab22b14c`.
+- Verified **Latest Release**, non-draft, non-prerelease; release workflow, CI and CodeQL passed.
+- Fast-forwarded `stable/v0.6.0` to the immutable tagged commit; removed the path-triggered, write-permission one-time publisher from development `main` after publication.
+- HomeDocker runtime, SQLite and scheduled OneDrive backups remain unchanged. The next scheduled snapshot has not been asserted as completed.
