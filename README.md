@@ -1,57 +1,81 @@
-# Xtream VOD Unified v0.6.0 — HomeDocker
+# Xtream VOD Unified
 
-**Official GitHub Release:** [v0.6.0 — HomeDocker Stable](https://github.com/olivergiangvu/xtream-vod-bridge/releases/tag/v0.6.0), published 16 October 2026. The release is source-only; the production container remains pinned to the previously accepted local image SHA.
+[**Official v0.6.0 Stable source release**](https://github.com/olivergiangvu/xtream-vod-bridge/releases/tag/v0.6.0) · [Install / restore](docs/install.md) · [User guide](docs/usage.md) · [Operations / Dockhand](docs/operations.md) · [Migration](docs/migration-v060.md) · [Security](SECURITY.md)
 
-**Status: operationally accepted on HomeDocker (16 October 2026).** Single-container Unified production, protected Safari sign-in, Owner/User Web UI, HTTPS legacy addon manifest and existing playback have been verified. This is not an independent security certification or a guarantee of portability to new hardware.
+Xtream VOD Unified is a private, self-hosted **Stremio/AIOStreams Movie & Series stream supplier** with a single FastAPI/Uvicorn container, signed playback relay, admin console and per-user Xtream/M3U VOD source workspace. It is not an AIOStreams metadata replacement or a live-TV/EPG system.
 
-This replaces the original v0.3–v0.5 overview, preserved in [historical README](docs/archive/README-pre-v0.6.md). The repository root `compose.yaml` is now a **safe Unified v0.6 reference**, pinned to the accepted image SHA. It intentionally requires an untracked `production.env` and an already restored Docker image/external volume; `docker compose up` from a fresh clone must not be treated as a turnkey deployment. Use the private canonical Compose deployed on HomeDocker.
+## Interface walkthrough
+
+The screenshots below were supplied by the HomeDocker operator during **16 October 2026 acceptance**. They show real UI state, not a claim that every upstream provider or personal manifest flow has passed end-to-end testing.
+
+| Workspace | Administration |
+| --- | --- |
+| ![My Sources & Addons screenshot from HomeDocker](docs/screenshots/ui-workspace.webp) | ![System Administration screenshot from HomeDocker](docs/screenshots/ui-admin.webp) |
+| **My Workspace:** add/test/sync owned Xtream/M3U sources and manage personal manifest tokens | **System Administration:** Owner account management and catalog health |
+
+![Dockhand Internal stack screenshot from HomeDocker](docs/screenshots/dockhand-internal.webp)
+
+Dockhand **Source: Internal** confirms management registration of the single production stack without a production redeploy. It does not prove future one-click redeploy viability.
+
+See the [illustrated usage guide](docs/usage.md) and [Dockhand operations guide](docs/operations.md) for screenshots and steps.
 
 ## Features
 
-- A single Uvicorn/FastAPI worker handles Xtream VOD indexing, Stremio/AIOStreams `/a/*` manifest and signed `/play/*` relay, and Admin/User interface.
-- Movies, series/episodes, identity-based matching and compatible HTTP Range playback; no Live TV, EPG, transcoding or guessed fuzzy matching.
-- Owner/System Administration, User/My Workspace, HTTPS Xtream or M3U personal sources, encrypted provider secrets and per-user private addon manifests.
-- Safari-native username/password gateway with secure cookies, nonce, CSRF and RBAC; session-guarded Admin assets and APIs.
-- `/live` O(1) liveness; `/ready` SQLite connection check; compatibility `/health` retained.
+- Legacy and personal Stremio/AIOStreams manifest routing at `/a/*`, signed Movie/Series playback and HTTP Range relay at `/play/*`.
+- One unified process with one SQLite-backed index; legacy and personal source isolation, identity-first IMDb/TMDb matching and configurable Series JIT.
+- User-owned HTTPS Xtream Codes and M3U VOD source configuration; per-user private manifests with one-time shown URLs, rotation and revocation.
+- Owner/Admin and User roles; Safari-compatible sign-in, session and CSRF validation; encrypted source credentials using private `SOURCE_SECRETS_KEY`.
+- Hardened nginx HTTPS boundary: public addon endpoints only, session-gated `/admin/`, public login gateway `/admin-signin/`, default-deny other backend routes.
 
-## Accepted topology
+**Current production is a specifically accepted HomeDocker deployment**, not a published container registry image. The image is identified by immutable Docker image ID:
 
 ```text
+sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd
+```
+
+The convenience local Docker tag `homedocker/xtream-vod-unified:0.6.0-stable` points to that image **on the existing HomeDocker only**; it is *not* a registry download URL. Production came from a locally patched Canary image. A new source rebuild is not proven image-equivalent and must be retested before substitution.
+
+## HomeDocker production architecture
+
+```text
+Browser / AIOStreams / clients
+    |
+    v
 Host nginx HTTPS :18450
-  /a/*, /play/*   -> public signed addon endpoints
-  /admin/*        -> nginx auth_request/session-protected Web UI
-  /admin-signin/* -> Safari form/login gateway
-  internal subrequest -> /api/auth/gate-check
-  all other public fallback paths -> 404
-          |
-  127.0.0.1:18769 -> xtream-vod-unified:8767
-          |
-  external Docker volume xtream-vod-bridge_xtream_vod_index
+  public  /a/* /play/*
+  gated   /admin/*  (auth_request)
+  login   /admin-signin/*
+  deny    /, /api/*, /assets/*, /gateway/*, /console/*
+    |
+    v
+127.0.0.1:18769 -> xtream-vod-unified:8767
+    |
+    v
+external Docker volume xtream-vod-bridge_xtream_vod_index
 ```
 
-Canonical management location: `/opt/homedocker/stacks/xtream-vod-unified/compose.yml`, with root-only `production.env`. Current known-good immutable image ID: `sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd`. The environment, OAuth-like private tokens, provider credentials, `SOURCE_SECRETS_KEY`, signing keys and SQLite content **must never be committed**.
+Canonical server-only Compose: `/opt/homedocker/stacks/xtream-vod-unified/compose.yml`; private `production.env` stays mode `0600`. **Never deploy the two retired legacy services against the same volume**.
 
-**Image provenance:** production image was patched locally from a Canary artifact to fix non-root JS asset modes. `Dockerfile.unified` now includes this correction, but a new source-built image has **not** been shown byte-identical or equivalent to the accepted binary. Do not redeploy an unverified rebuilt image in place of `sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd`.
+## Installation, usage and maintenance
 
-## Docs and recovery
+| Guide | Purpose |
+| --- | --- |
+| [Install & recover](docs/install.md) | Prerequisites, verified image restore, source-build limitations, Compose and nginx |
+| [User guide](docs/usage.md) | Sign-in, My Workspace, Source Test/Sync, manifest creation and Owner tools |
+| [Operations & Dockhand](docs/operations.md) | Health, logs, SHA verification, Internal stack, least-privilege permissions |
+| [v0.6 migration](docs/migration-v060.md) | Single-container transition, rollback archive and change-control boundaries |
+| [Open issues / known limits](docs/issue-triage-v0.6.md) | Fixed/superseded work versus unresolved security and integration gates |
+| [DR runbook](docs/deployment/homedocker-v0.6.md) | Full hardware restore prerequisites, data/key pairing, rollback risks |
+| [Acceptance evidence](docs/release/0.6-unified-stable-gates.md) | Tested runtime, known image SHA and deferred full DR test |
 
-- [v0.6 acceptance gates & incident record](docs/release/0.6-unified-stable-gates.md)
-- [HomeDocker deployment & restore](docs/deployment/homedocker-v0.6.md)
-- [Reference Unified Compose](deploy/compose.unified.example.yaml)
-- [ADR-0005: single ASGI process](docs/adr/0005-unified-xtream-one-container.md)
-- [Security](SECURITY.md) · [Changelog](CHANGELOG.md) · [Historical README](docs/archive/README-pre-v0.6.md)
+## Verified and not verified
 
-OneDrive/restic snapshot `4cee1ca2` (2026-10-16 09:52 ICT) passed repository integrity and selected remote reads; staged canonical Compose/environment match production, the SQLite volume was included, and a ~150.8 MiB image archive exists. **New rollback archives created after that snapshot require a later backup. Full hardware replacement restore remains untested.**
+**Verified on 2026-10-16:** healthy single container, 0 restarts, correctly pinned image ID, loopback backend, secure HTTPS admin redirect, Safari Owner UI, legacy manifest/existing playback, canonical Compose ownership, Dockhand **Internal** registration, 22 old image tags removed without deleting the production volume.
 
-## Developer checks (not deployment commands)
+**Not yet proven:** all personal Xtream/M3U providers end-to-end; full bare-metal restore; equivalence of a clean build to the locally patched stable image; complete DNS-rebinding proof for all outbound transports. Please see the open issues rather than assuming these gates are closed.
 
-```bash
-python -m pip install -r requirements.txt
-python -m unittest discover -s tests -v
-node --check admin/assets/app.js
-node --check admin/assets/workspace.js
-node tests/ui_workspace_smoke.js
-python scripts/check_repo.py
-```
+## Security
 
-Use only authorized content providers; observe connection limits and applicable copyright rules.
+This repository is public; **never commit** `production.env`, Fernet `SOURCE_SECRETS_KEY`, provider URLs with credentials, signed addon URLs, manifest tokens, SQLite files, raw sessions, restic passwords or Docker exports. Read [SECURITY.md](SECURITY.md) before opening ports.
+
+Use only authorized media sources and respect provider terms.
