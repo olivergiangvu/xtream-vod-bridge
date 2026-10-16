@@ -13,20 +13,20 @@ This document distinguishes **verified acceptance** from architecture proposals 
 
 These are documented in [acceptance](release/0.6-unified-stable-gates.md) and [operations](operations.md).
 
-## Still OPEN — do not falsely close
+## Still OPEN — 4 verified unresolved issues
 
 | Issue | Why it remains open |
 | --- | --- |
 | [#27](https://github.com/olivergiangvu/xtream-vod-bridge/issues/27) | DNS rebind / TOCTOU safety for real TCP targets and every redirect hop not demonstrated end-to-end |
-| [#23](https://github.com/olivergiangvu/xtream-vod-bridge/issues/23) | Historical *system-wide* multi-provider registry proposal is not equivalent to shipped **per-user** private sources; clarify future scope |
 | [#19](https://github.com/olivergiangvu/xtream-vod-bridge/issues/19) | Series JIT source/tests exist, but all original *live cold-Series* performance/acceptance criteria were not demonstrated |
 | [#18](https://github.com/olivergiangvu/xtream-vod-bridge/issues/18) | Grace-period pruning for transient Series list omissions not proven deployed |
 | [#14](https://github.com/olivergiangvu/xtream-vod-bridge/issues/14) | AIOMetadata anime ID crosswalk, downstream player/Trakt tests pending |
-| [#1](https://github.com/olivergiangvu/xtream-vod-bridge/issues/1) | Original exhaustive provider-to-player gate contains additional untested CDNs, limits and disaster-recovery items |
 
-## Superseded design
+## Superseded / closed as not planned
 
-- [#22](https://github.com/olivergiangvu/xtream-vod-bridge/issues/22) requested a **separate LAN-only HTTPS admin listener** at historical 18769. The accepted design instead reuses **existing HTTPS :18450** with gated `/admin/` and loopback app port 18769. Close the old design as *not planned/superseded*, **not as completed verbatim**.
+- [#22](https://github.com/olivergiangvu/xtream-vod-bridge/issues/22) requested a **separate LAN-only HTTPS admin listener**. The accepted design reuses **existing HTTPS :18450**, with gated `/admin/` and loopback app port 18769. **Closed: not planned/superseded**, not completed verbatim.
+- [#1](https://github.com/olivergiangvu/xtream-vod-bridge/issues/1) was the exhaustive **v0.1.2 pre-production checklist**, including old port 18767 and provider/CDN/player/DR tests. **Closed: not planned/superseded** by the v0.6.0 migration and [current production checklist](production-checklist.md). This does **not** claim all legacy checks, new personal-provider playback, rate limiting or full new-hardware DR have passed.
+- [#23](https://github.com/olivergiangvu/xtream-vod-bridge/issues/23) proposed a **system-wide provider registry with transactional global table migration**. v0.6.0 instead ships **per-user encrypted Xtream/M3U sources with scoped manifests** and retains the legacy global index. **Closed: not planned/superseded**; the global registry, global provider selection/aggregation, and migrations are **not implemented or asserted fixed**. Any renewed global-registry request needs a newly scoped proposal.
 
 ## Stale PR cleanup
 
