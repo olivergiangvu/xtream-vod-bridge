@@ -1,9 +1,13 @@
 # ADR-0005 — Unified Xtream runtime and resource-limited Canary
 
-- **Status:** Accepted as target architecture, implementation pending
+- **Status:** Accepted and implemented on HomeDocker (2026-10-16); historical development plan retained below
 - **Date:** 2026-10-15
 - **Scope:** Xtream VOD Bridge / HomeDocker (2 logical CPUs)
 - **Change control:** Documentation only. This ADR authorizes no live container, Compose, nginx, secret or firewall changes.
+
+## Post-deployment addendum (2026-10-16)
+
+The single-worker container and canonical Compose model are now live. Canary/legacy cutover instructions below document the *design history*, not current runnable production tasks. See [production acceptance record](../release/0.6-unified-stable-gates.md) for the file-mode hotfix, nginx auth race, default-deny hardening and remaining DR obligations. The locally patched production image is not yet proven equivalent to a clean build from this commit.
 
 ## Decision
 
