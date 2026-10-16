@@ -22,4 +22,4 @@ All production env vars, Fernet `SOURCE_SECRETS_KEY` and IPTV credentials stay o
 - Encrypted OneDrive/restic snapshot `4cee1ca2` passed earlier repository integrity and selected remote read tests; post-cleanup rollback archives were created later and await the next **scheduled** backup. Full restore to different hardware remains untested.
 - No live provider secrets, SQLite databases, backups or image tar files are distributed.
 
-See [README](../../README.md), [CHANGELOG](../../CHANGELOG.md), [security policy](../../SECURITY.md), [runbook](../deployment/homedocker-v0.6.md), and [acceptance record](0.6-unified-stable-gates.md).
+See [README](https://github.com/olivergiangvu/xtream-vod-bridge/blob/v0.6.0/README.md), [CHANGELOG](https://github.com/olivergiangvu/xtream-vod-bridge/blob/v0.6.0/CHANGELOG.md), [security policy](https://github.com/olivergiangvu/xtream-vod-bridge/blob/v0.6.0/SECURITY.md), [runbook](https://github.com/olivergiangvu/xtream-vod-bridge/blob/v0.6.0/docs/deployment/homedocker-v0.6.md), and [acceptance record](https://github.com/olivergiangvu/xtream-vod-bridge/blob/v0.6.0/docs/release/0.6-unified-stable-gates.md).
