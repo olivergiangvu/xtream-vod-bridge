@@ -19,3 +19,4 @@ docs/
 production.env
 *.env
 *.env.*
+!.env.example
