@@ -1,37 +1,32 @@
-# Architecture and responsibilities
+# Architecture — Xtream VOD Unified v0.6.0
+
+See [README](../README.md), [installation](install.md), [usage](usage.md), [DR](deployment/homedocker-v0.6.md) and [ADR-0005](adr/0005-unified-xtream-one-container.md).
 
 ```text
-Authenticated Xtream provider
-  ├─ get_vod_streams -> movies inventory
-  ├─ get_vod_info -> IMDb/TMDb keys, container extension
-  ├─ get_series -> TV inventory
-  └─ get_series_info -> IDs + episode list
-         |
-         v
-    Xtream VOD Bridge (one Docker container)
-    SQLite index + scheduled enrichment
-    optional TMDb crosswalk
-    Stremio /manifest.json, /stream/{movie,series}/...json
-    signed /play HTTP relay
-         |
-         v
-    AIOStreams (Custom Stremio addon)
-    Addon-first sorting / provider priority
-         |
-         v
-    Remux / Trellis / Jellyfin-compatible clients
+Xtream/M3U HTTPS sources (authorized)
+       |
+       v
+Unified FastAPI/Uvicorn :8767, host loopback :18769
+  ├── Owner/User Admin UI, sessions/RBAC, encrypted personal source storage
+  ├── Legacy/addon & personal Stremio manifest APIs, signed play relay
+  ├── SQLite index and single background scheduler
+  └── personal source/manifest scoping with exact identity matching
+       |
+       v
+host nginx HTTPS :18450
+  ├── /admin/* (session-gated) and /admin-signin/* (login)
+  ├── /a/* and /play/* (public signed addon traffic)
+  └── default deny unrelated backend paths
+       |
+       v
+AIOStreams (addon aggregation/order) -> Remux / Trellis / player
 ```
 
-`Xtream VOD Bridge` is an upstream stream **supplier**, not a replacement for AIOStreams metadata or playback clients. ID matching is strict. Library sync takes place independently from search, and search can return empty while enrichment is incomplete.
+### Boundaries
 
-### Source ranking
-
-Addon returns `Xtream VOD Bridge` as source name. **AIOStreams is responsible for ranking**; the bridge cannot guarantee pinning in a client that overrides sorting or filters HTTP streams. Put bridge first in addon order and set Addon as the primary sorting criterion separately for Movies/Series if configured.
-
-### Isolation
-
-Compose binds `127.0.0.1:18767 -> container:8767`, so it does not open another LAN/WAN listener. Nginx on HomeDocker owns HTTPS. SQLite uses `xtream_vod_index` and is the only persistent volume. `compose up -d --build` affects only the new stack.
-
-### Operational limitations
-
-Current playback relay is a byte proxy. Some upstream HLS or redirects require specialized handling. Signed URLs expire, so older cached AIOStreams results may fail until re-fetched. Bridge only supports one provider in this version.
+- AIOStreams and AIOMetadata, not this bridge, own search/ranking/metadata presentation. Bridge cannot guarantee playback-client sorting/priority.
+- Personal sources are per-user and distinct from earlier proposed system-wide provider registry (#23). The legacy global provider may still exist.
+- `/a` and `/play` URLs are private bearer/signature URLs; protect them. Signed URLs expire.
+- SQLite persists in external Docker volume `xtream-vod-bridge_xtream_vod_index` and **requires matching Fernet `SOURCE_SECRETS_KEY`** for decrypting personal credentials.
+- No Live TV, EPG, transcoding or automatic fuzzy media identity merge.
+- Real upstream DNS rebinding/TOCTOU, personal new-provider end-to-end playback and full hardware DR are open verification gates (see [issue register](issue-triage-v0.6.md)).
