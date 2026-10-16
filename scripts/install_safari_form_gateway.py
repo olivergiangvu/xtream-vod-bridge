@@ -104,6 +104,8 @@ def fingerprint(cert):
 
 def tls_fingerprint():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    # Do not negotiate obsolete TLS 1.0/1.1 during certificate fingerprint checks.
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.check_hostname = False   # Fingerprint-only preflight, not HTTP trust bypass
     ctx.verify_mode = ssl.CERT_NONE
     with socket.create_connection((IP, PORT), timeout=6) as raw:
