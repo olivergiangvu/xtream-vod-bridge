@@ -10,7 +10,12 @@ The screenshots below were supplied by the HomeDocker operator during **16 Octob
 
 | Workspace | Administration |
 | --- | --- |
-| [My Sources & Addons](docs/screenshots/README.md) — add/test/sync owned Xtream/M3U sources and manage personal manifest tokens | [System Administration](docs/screenshots/README.md) — Owner account management and catalog health |
+| ![My Sources & Addons screenshot from HomeDocker](docs/screenshots/ui-workspace.webp) | ![System Administration screenshot from HomeDocker](docs/screenshots/ui-admin.webp) |
+| **My Workspace:** add/test/sync owned Xtream/M3U sources and manage personal manifest tokens | **System Administration:** Owner account management and catalog health |
+
+![Dockhand Internal stack screenshot from HomeDocker](docs/screenshots/dockhand-internal.webp)
+
+Dockhand **Source: Internal** confirms management registration of the single production stack without a production redeploy. It does not prove future one-click redeploy viability.
 
 See the [illustrated usage guide](docs/usage.md) and [Dockhand operations guide](docs/operations.md) for screenshots and steps.
 

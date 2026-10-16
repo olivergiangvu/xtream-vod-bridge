@@ -12,6 +12,8 @@ Open the approved HTTPS hostname at `https://YOUR_FQDN:18450/admin/`. Unauthenti
 
 ## 2. My Workspace → My Sources & Addons
 
+![Operator-provided screenshot: My Workspace, My IPTV Sources and Personal Manifests](screenshots/ui-workspace.webp)
+
 The **My IPTV Sources** panel lets each account:
 - Add a private source: display name → source type **Xtream Codes** or **M3U Playlist URL**.
 - For Xtream: enter an **HTTPS** server URL, provider username and password. For M3U: use an **HTTPS** playlist URL. Use authorized providers only.
@@ -27,6 +29,8 @@ Do not paste manifest URLs into issues, screenshots, public browsers, or support
 The UI, private source forms, RBAC and manifest lifecycle are implemented. **End-to-end new-provider manifest→real player playback was not fully demonstrated** at v0.6.0 acceptance. Test with your own provider before replacing fallback addons.
 
 ## 3. System Administration (Admin only)
+
+![Operator-provided screenshot: Owner/System Administration and catalog counts](screenshots/ui-admin.webp)
 
 The Owner/Admin can access:
 - **User Management**: create User accounts, disable users, rotate/reset credentials. The built-in Owner stays the Admin.

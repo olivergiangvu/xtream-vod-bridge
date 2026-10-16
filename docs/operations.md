@@ -19,6 +19,8 @@ Use `sudo docker logs --tail 50 xtream-vod-unified` locally only; **redact token
 
 ## Dockhand Internal stack and permissions
 
+![Operator screenshot: xtream-vod-unified Running with Source Internal in Dockhand](screenshots/dockhand-internal.webp)
+
 The operator's Dockhand **v1.0.53** screenshot confirms `xtream-vod-unified` in the Stacks table with **Source: Internal**, Status: Running, and path under `/opt/homedocker/stacks/`. This is *file-management integration*, not proof that a future one-click redeploy can read root-owned secrets.
 
 Observed file policy on HomeDocker after the ACL repair:
