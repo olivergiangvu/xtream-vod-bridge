@@ -1,12 +1,18 @@
+# HomeDocker v0.6 reference only. Real canonical production Compose stays on the host.
+# Requires the private production.env, external SQLite volume, and SHA-pinned image archive.
+# Reference only: private production.env and image archive are intentionally absent.
+name: xtream-vod-unified
 services:
-  xtream-vod-bridge:
-    build: .
-    image: homedocker/xtream-vod-bridge:0.4.2.3
-    container_name: xtream-vod-bridge
+  unified:
+    image: sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd
+    pull_policy: never
+    container_name: xtream-vod-unified
     restart: unless-stopped
-    env_file: .env
+    user: "10001:10001"
+    env_file:
+      - ./production.env
     ports:
-      - "127.0.0.1:${BRIDGE_HOST_PORT:-18767}:8767"
+      - "127.0.0.1:18769:8767"
     volumes:
       - xtream_vod_index:/data
     security_opt:
@@ -17,37 +23,12 @@ services:
     tmpfs:
       - /tmp:rw,nosuid,nodev,noexec,size=16m
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/health',timeout=3)"]
-      interval: 30s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/live',timeout=3)"]
+      interval: 60s
       timeout: 5s
       retries: 3
-      start_period: 15s
-  xtream-vod-admin:
-    image: homedocker/xtream-vod-bridge:0.4.2.3
-    container_name: xtream-vod-admin
-    restart: unless-stopped
-    depends_on:
-      xtream-vod-bridge:
-        condition: service_healthy
-    env_file: .env
-    command: ["uvicorn", "admin_ui:console", "--host", "0.0.0.0", "--port", "8768", "--no-access-log"]
-    ports:
-      - "127.0.0.1:${BRIDGE_ADMIN_HOST_PORT:-18768}:8768"
-    volumes:
-      - xtream_vod_index:/data
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
-    tmpfs:
-      - /tmp:rw,nosuid,nodev,noexec,size=16m
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8768/',timeout=3)"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
+      start_period: 20s
 volumes:
   xtream_vod_index:
+    external: true
+    name: xtream-vod-bridge_xtream_vod_index

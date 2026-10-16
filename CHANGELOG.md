@@ -10,3 +10,8 @@
 - Canonical Compose migration, retirement of legacy and Canary containers, local archival of old SQLite checkpoints and images.
 - Restic/OneDrive snapshot `4cee1ca2` passed repository integrity and selected remote read checks; post-cleanup offsite backup and full hardware DR drill remain pending.
 - Running pinned image ID: `sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd`. A clean-source image replacement still requires independent verification.
+
+### Repository housekeeping
+
+- Replaced obsolete root two-service `compose.yaml` with the SHA-pinned Unified reference; archived the legacy Compose in `docs/archive/compose-legacy-two-service.yaml`.
+- Public documentation deliberately excludes real nginx TLS material, `.env`, IPTV credentials and Fernet signing secrets.
