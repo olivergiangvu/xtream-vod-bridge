@@ -15,11 +15,12 @@ from pathlib import Path
 from urllib.parse import quote, urlencode, urljoin, urlsplit
 
 import httpx
+import ops
 from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.background import BackgroundTask
 from fastapi.responses import Response, StreamingResponse
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 LOG = logging.getLogger("xtream-vod-bridge")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # Xtream player_api.php uses query-string credentials. The HTTP client may
@@ -39,6 +40,9 @@ SYNC_HOURS = max(1, int(os.getenv("SYNC_HOURS", "6")))
 MAX_ENRICH = max(0, int(os.getenv("MAX_ENRICH_PER_SYNC", "250")))
 SERIES_SYNC_QUOTA = max(0, int(os.getenv("SERIES_ENRICH_PER_SYNC", "40")))
 SERIES_BOOTSTRAP_BATCH = max(0, int(os.getenv("SERIES_BOOTSTRAP_BATCH", "0")))
+# Dedicated isolated canary containers must not bootstrap the legacy IPTV source.
+# Production/default remains enabled, with no change in legacy sync cadence.
+LEGACY_SYNC_ENABLED = os.getenv("LEGACY_SYNC_ENABLED", "1") == "1"
 SERIES_BOOTSTRAP_INTERVAL_MINUTES = max(
     15, int(os.getenv("SERIES_BOOTSTRAP_INTERVAL_MINUTES", "30"))
 )
@@ -170,6 +174,7 @@ def init_db():
             if column not in existing:
                 conn.execute(f"ALTER TABLE items ADD COLUMN {column} TEXT")
             conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{column} ON items(kind, {column})")
+    ops.init()
 
 
 def clean_id(value):
@@ -466,7 +471,7 @@ async def on_demand_series_info(row, season, episode):
             return
         # A successful detail fetch also caches negative episode lookups. New
         # episodes become eligible again after TTL (default 6 hours).
-        if persisted["checked_at"] > now - SERIES_JIT_TTL:
+        if persisted["checked_at"] > now - ops.get("series_jit_ttl_hours", SERIES_JIT_TTL / 3600) * 3600:
             JIT_STATS["negative_cache"] += 1
             return
         if JIT_RETRY_AFTER.get(series_id, 0) > time.monotonic():
@@ -504,22 +509,24 @@ async def on_demand_series_info(row, season, episode):
                      anime.get("kitsu_id"), anime.get("mal_id"), series_id),
                 )
             JIT_STATS["fetch_ok"] += 1
+            ops.event("series_jit", "series", "ok", amount=len(parsed))
             JIT_RETRY_AFTER.pop(series_id, None)
         except asyncio.CancelledError:
             # Deadline cancellation is expected; never persist half a fetch.
             raise
         except Exception as exc:
             JIT_STATS["fetch_failed"] += 1
-            JIT_RETRY_AFTER[series_id] = time.monotonic() + SERIES_JIT_RETRY_SECONDS
+            JIT_RETRY_AFTER[series_id] = time.monotonic() + ops.get("series_jit_retry_seconds", SERIES_JIT_RETRY_SECONDS)
+            ops.event("series_jit", "series", "error")
             LOG.warning("Series JIT unavailable error=%s", type(exc).__name__)
 
 
 async def hydrate_requested_episode(rows, season, episode):
     """Independent Series variants; bound *entire* request wall time."""
-    if not SERIES_ON_DEMAND or MOVIES_ONLY or not rows:
+    if not ops.get("series_on_demand", SERIES_ON_DEMAND) or MOVIES_ONLY or not rows:
         return
     candidates = []
-    for row in rows[:SERIES_JIT_MAX_VARIANTS]:
+    for row in rows[:ops.get("series_jit_max_variants", SERIES_JIT_MAX_VARIANTS)]:
         if episode_rows(row["item_id"], season, episode):
             JIT_STATS["cache_hit"] += 1
         else:
@@ -529,9 +536,10 @@ async def hydrate_requested_episode(rows, season, episode):
     tasks = [asyncio.create_task(on_demand_series_info(row, season, episode))
              for row in candidates]
     try:
-        done, pending = await asyncio.wait(tasks, timeout=SERIES_JIT_TIMEOUT)
+        done, pending = await asyncio.wait(tasks, timeout=ops.get("series_jit_timeout_seconds", SERIES_JIT_TIMEOUT))
         if pending:
             JIT_STATS["timeout"] += len(pending)
+            ops.event("series_jit", "series", "timeout", amount=len(pending))
         for task in pending:
             task.cancel()
         if pending:
@@ -696,7 +704,7 @@ async def sync_all():
             else:
                 # Avoid starvation: always reserve Series detail requests first,
                 # while keeping the original total MAX_ENRICH cap unchanged.
-                series_budget = min(MAX_ENRICH, SERIES_SYNC_QUOTA, pending_count("series"))
+                series_budget = min(MAX_ENRICH, ops.get("series_enrich_per_sync", SERIES_SYNC_QUOTA), pending_count("series"))
             series_enriched = await enrich_items(kind="series", limit=series_budget)
             movie_enriched = await enrich_items(kind="movie", limit=MAX_ENRICH - series_budget)
             enriched = series_enriched + movie_enriched
@@ -704,6 +712,7 @@ async def sync_all():
             LAST_RUN["series_enriched_last_sync"] = series_enriched
             LAST_RUN["enriched"] = enriched
             LAST_RUN["last_error"] = None
+            ops.event("sync", "system", "ok", amount=enriched)
             return {"status": "ok", "lists": lists, "enriched": enriched,
                     "movie_enriched": movie_enriched, "series_enriched": series_enriched}
         except Exception as exc:
@@ -711,6 +720,7 @@ async def sync_all():
             # Never surface those in /health or persistent logs.
             LAST_RUN["last_error"] = type(exc).__name__
             LOG.error("Sync failed: %s", type(exc).__name__)
+            ops.event("sync", "system", "error")
             return {"status": "error", "error": "Check server logs; provider may be unavailable"}
 
 
@@ -756,9 +766,10 @@ async def loop():
 async def lifespan(_app):
     check_settings()
     init_db()
-    task = asyncio.create_task(loop())
+    task = asyncio.create_task(loop()) if LEGACY_SYNC_ENABLED else None
     bootstrap = (asyncio.create_task(series_bootstrap_loop())
-                 if not MOVIES_ONLY and SERIES_BOOTSTRAP_BATCH > 0 else None)
+                 if LEGACY_SYNC_ENABLED and not MOVIES_ONLY
+                 and SERIES_BOOTSTRAP_BATCH > 0 else None)
     try:
         yield
     finally:
@@ -796,7 +807,7 @@ async def health():
     return {"status": "ok", "version": VERSION, "last_sync": LAST_RUN["list_sync"],
             "enriched_last_sync": LAST_RUN["enriched"], "last_error": LAST_RUN["last_error"],
             "index": stats, "episodes": episode_count,
-            "series_on_demand": SERIES_ON_DEMAND and not MOVIES_ONLY,
+            "series_on_demand": ops.get("series_on_demand", SERIES_ON_DEMAND) and not MOVIES_ONLY,
             "jit": dict(JIT_STATS),
             "series_progress": {"details_checked": series_checked,
                                 "with_episodes": series_with_episodes,
@@ -824,6 +835,9 @@ def authorized(token):
 
 @app.get("/a/{token}/manifest.json")
 async def manifest(token: str):
+    if token.startswith("v5_"):
+        import personal_playback
+        return personal_playback.manifest(token)
     authorized(token)
     return {"id": "org.homedocker.xtreamvod", "version": VERSION,
             "name": "Xtream VOD Bridge", "description": "Private Xtream VOD HTTP streams by verified IMDb/TMDb IDs",
@@ -860,6 +874,9 @@ def records_for(kind, imdb_id=None, tmdb_id=None, anime_kind=None, anime_id=None
 
 @app.get("/a/{token}/stream/{media_type}/{media_id}.json")
 async def streams(token: str, media_type: str, media_id: str):
+    if token.startswith("v5_"):
+        import personal_playback
+        return personal_playback.streams(token, media_type, media_id)
     authorized(token)
     if media_type not in ("movie", "series") or (media_type == "series" and MOVIES_ONLY):
         return {"streams": []}
@@ -887,7 +904,8 @@ async def streams(token: str, media_type: str, media_id: str):
         return {"streams": []}
     if media_type == "movie" and season is not None:
         return {"streams": []}
-    if media_type == "series" and SERIES_ON_DEMAND:
+    started = time.monotonic()
+    if media_type == "series" and ops.get("series_on_demand", SERIES_ON_DEMAND):
         await hydrate_requested_episode(rows, int(season), int(episode))
     result = []
     for row in rows:
@@ -910,7 +928,7 @@ async def streams(token: str, media_type: str, media_id: str):
             if not MEDIA_KEY.fullmatch(identity):
                 continue
             metadata_label = identity.replace("tmdb-", "TMDb ").replace("anilist-", "AniList ").replace("kitsu-", "Kitsu ").replace("mal-", "MAL ")
-            source_name = "IPTV VOD" + (f" {quality}" if quality else "")
+            source_name = ops.get("source_label") + (f" {quality}" if quality else "")
             hints = {"notWebReady": ext.lower() != "mp4", "filename": filename}
             if media_type == "series":
                 hints["bingeGroup"] = f"xtream-vod-series-{row['item_id']}"
@@ -922,7 +940,11 @@ async def streams(token: str, media_type: str, media_id: str):
                            "behaviorHints": hints})
         if len(result) >= 20:
             break
-    return {"streams": result[:20]}
+    selected_streams = result[:20]
+    ops.event("stream_request", media_type, "ok" if selected_streams else "empty",
+              duration_ms=(time.monotonic() - started) * 1000,
+              amount=len(selected_streams))
+    return {"streams": selected_streams}
 
 
 def valid_signature(kind, sid, ext, exp, sig):
@@ -1082,3 +1104,19 @@ async def relay_stream(kind, sid, ext, request, filename=None):
         return Response(content=b"", status_code=upstream.status_code, headers=out_headers)
     return StreamingResponse(chunks(), status_code=upstream.status_code, headers=out_headers,
                              background=BackgroundTask(client.aclose))
+
+
+@app.api_route(
+    "/play/v5/{manifest_id}/{source_id}/{kind}/{item_key}/{stream_key}/"
+    "{identity}/{exp}/{signature}/{filename}",
+    methods=["GET", "HEAD"],
+)
+async def play_personal_v5(manifest_id: str, source_id: str, kind: str,
+                           item_key: str, stream_key: str, identity: str,
+                           exp: str, signature: str, filename: str,
+                           request: Request):
+    import personal_playback
+    return await personal_playback.relay(
+        manifest_id, source_id, kind, item_key, stream_key, identity,
+        exp, signature, filename, request,
+    )

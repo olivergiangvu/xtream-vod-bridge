@@ -1,28 +1,14 @@
-# Security policy
+# Security policy — Unified v0.6
 
-This repository is a public-source **prototype**, not an audited streaming proxy. No real provider credentials, real playlist data, or signed streaming URLs are distributed.
+Public source repository; **private self-hosted deployment**, not audited for unrestricted public Internet use.
 
-## Never put in GitHub
+**Never commit or paste:** `.env` / `production.env`, IPTV logins, private M3U URLs, `SOURCE_SECRETS_KEY`, `ADDON_TOKEN`, `ADMIN_TOKEN`, `PLAYBACK_SECRET`, TMDb keys, login cookies/nonces, signed addon or playback URLs, raw request logs, database snapshots, backup exports and Docker inspect dumps.
 
-- Xtream endpoint with embedded user/password or session credentials
-- `.env`, `ADDON_TOKEN`, `ADMIN_TOKEN`, `PLAYBACK_SECRET`, TMDb keys
-- Real provider responses that contain account details or signed playback URLs
-- Full HTTP logs, Docker inspect output, database snapshots or backups
+### Ingress
+The existing nginx HTTPS listener :18450 allows only public `/a/*`, `/play/*`, explicitly authenticated `/admin/*`, `/admin-signin/*`, and nginx-internal session subrequest. **Do not forward private backend 18769**. Reject catch-all routes that expose `/`, `/console`, `/gateway/*`, `/api/*`, `/assets/*` outside the protected Admin prefix. Safari gateway remains accessible for login, but authenticated sessions, CSRF Origin, secure SameSite cookies and random nonce remain required. ASUS hairpin NAT may disguise WAN clients as LAN: do not rely on IP ACL alone.
 
-## Reporting
+### Runtime
+Run UID/GID 10001, dropped capabilities, read-only rootfs, no privilege escalation and private Docker volume. One scheduler owns the writable SQLite index: never start retired legacy and Unified writers simultaneously. Keep provider credentials encrypted under the matching Fernet key and private signed manifests protected. Uvicorn access logs are disabled to avoid logging tokens embedded in URLs; upstream redirects must stay restricted to approved hosts/ports.
 
-Raise security issues privately with the repository owner. Do not paste sensitive URL query strings in issues or PRs. Rotate affected keys immediately if accidentally exposed.
-
-## Runtime controls
-
-- Bind the service to `127.0.0.1` on HomeDocker and use an HTTPS reverse proxy.
-- Protect addon and admin endpoints with independent random tokens.
-- Stream relay URLs are HMAC-signed and time-limited; relay does not transcode.
-- Disable Uvicorn access logs (they would expose the addon token and signed URL); suppress HTTPX request logs (they could expose Xtream query-string credentials).
-- Limit Docker capabilities, run as non-root, do not mount Docker socket.
-- Store `.env` with restrictive filesystem permissions, in encrypted DR snapshots only.
-- Observe permitted content usage and provider connection limits.
-
-## Known pre-production gaps
-
-Unapproved provider redirects are rejected, and approved CDN redirects are host/port-restricted (mocked tests only). Remaining gaps: rate abuse of a publicly reachable streaming endpoint, DNS/egress policy for approved provider domains, hostile playlist contents, real provider integration tests, HLS playlist rewriting, and reproducible dependency lock. Do not publish as an unrestricted Internet service before addressing these limitations.
+### Assurance boundary
+2026-10-16 operational checks covered HTTPS auth, nginx default deny, legacy addon and playback, healthy runtime, selected OneDrive/restic read/integrity verification. Not tested: public penetration test, all M3U/Xtream sources, full bare-metal restore, resource abuse/rate limiting, reproducible dependency lock, or equivalence of a fresh GitHub image build to the locally patched production binary. Report issues privately without secrets.

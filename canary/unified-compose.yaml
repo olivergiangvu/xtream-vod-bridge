@@ -1,0 +1,52 @@
+# Stage M3: exactly one temporary, isolated Xtream Unified Canary.
+# This file is NOT deployed automatically and MUST use a separately reviewed
+# SHA-pinned apply script, distinct from production and legacy 2-service Canary.
+# CANARY_DIR=/opt/xtream-vod-canary; CANARY_UNIFIED_IMAGE=<reviewed local image>
+services:
+  xtream-unified:
+    image: ${CANARY_UNIFIED_IMAGE:?CANARY_UNIFIED_IMAGE must be pinned}
+    pull_policy: never
+    container_name: xtream-vod-unified-canary
+    restart: "no"
+    cpus: "0.50"
+    mem_limit: 256m
+    pids_limit: 64
+    env_file:
+      - ${CANARY_DIR:?CANARY_DIR must be defined}/secrets/canary.env
+    environment:
+      XTREAM_UNIFIED_MODE: "1"
+      LEGACY_SYNC_ENABLED: "0"
+      XTREAM_URL_PREFIX: "/canary"
+      XTREAM_SESSION_COOKIE: xtream_canary_admin_session
+      XTREAM_LOGIN_NONCE_COOKIE: xtream_canary_login_nonce
+      XTREAM_GATEWAY_REFERRER_POLICY: same-origin
+      ADMIN_PUBLIC_ORIGIN: https://olivergiangvu.asuscomm.com:18450
+      PUBLIC_BASE_URL: https://olivergiangvu.asuscomm.com:18450/canary
+    volumes:
+      - ${CANARY_DIR}/unified-data:/data
+    networks:
+      - unified_private
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=16m
+    command:
+      - uvicorn
+      - unified_app:application
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8767"
+      - --no-access-log
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/live', timeout=3)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+networks:
+  unified_private:
+    internal: true

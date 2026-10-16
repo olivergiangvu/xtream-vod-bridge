@@ -1,9 +1,8 @@
 name: CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'feat/v0.4-admin-console', 'feat/v0.4.1-admin-18450-prefix', 'feat/v0.4.2-password-login-private-relay', 'fix/v0.4.2-safari-form-login', 'fix/v0.4.2-safari-form-origin', 'fix/v0.4.2-safari-null-origin-referrer']
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -24,7 +23,33 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python source
-        run: python -m compileall -q app.py tests
+        run: python -m compileall -q app.py unified_app.py admin_ui.py admin_auth.py ops.py scripts tests
+      - name: Check browser JavaScript syntax
+        run: |
+          node --check admin/assets/app.js
+          node --check admin/assets/workspace.js
+          node --check tests/ui_workspace_smoke.js
+          bash -n canary/upgrade_ui_only.sh
+          bash -n canary/prepare_stage4_auth.sh
+          python -m py_compile canary/stage4b_preflight.py
+          python -m py_compile canary/stage4c_sameport_preflight.py
+          python -m py_compile canary/stage4d_route_review.py
+          python -m py_compile canary/stage4e_compose_preflight.py
+          python -m py_compile canary/stage4e2_ports_dryrun.py
+          python -m py_compile canary/stage4f_apply_compose_ports.py
+          python -m py_compile canary/stage5a_readonly_preflight.py
+          python -m py_compile canary/stage5a2_build_only.py
+          python -m py_compile canary/stage5a3_recreate_plan.py
+          python -m py_compile canary/stage5a3_atomic_recreate.py
+          python -m py_compile canary/stage6_unified_image_build.py
+          python -m py_compile canary/stage6_unified_launch_plan.py
+          python -m py_compile canary/stage6_unified_launch_apply.py
+          python -m py_compile canary/stage6_unified_startup_diagnostic.py
+          python -m py_compile canary/stage6_unified_permission_fix_build.py
+          python -m py_compile canary/stage6_unified_permfix_runtime_verify.py
+          bash -n canary/upgrade_same_port_containers.sh
+      - name: Run no-network browser JS smoke
+        run: node tests/ui_workspace_smoke.js
       - name: Run offline tests
         run: python -m unittest discover -s tests -v
       - name: Verify sensitive local config is not tracked
