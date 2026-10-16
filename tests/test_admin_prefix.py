@@ -102,8 +102,9 @@ class AdminPrefixTests(unittest.TestCase):
         self.assertNotRegex(active, r"location[^\n]+/(?:play|a)/")
         self.assertNotIn("proxy_pass http://127.0.0.1:18767", active)
 
-    def test_main_and_admin_compose_image_tags_are_identical(self):
-        compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+    def test_archived_legacy_compose_image_tags_were_identical(self):
+        # Historical two-container invariant; it must not constrain v0.6 root Compose.
+        compose = (ROOT / "docs/archive/compose-legacy-two-service.yaml").read_text(encoding="utf-8")
         main = compose.split("  xtream-vod-bridge:", 1)[1].split("  xtream-vod-admin:", 1)[0]
         admin = compose.split("  xtream-vod-admin:", 1)[1]
         def image(block):
@@ -111,6 +112,15 @@ class AdminPrefixTests(unittest.TestCase):
                         if line.startswith("    image: "))
         self.assertEqual(image(main), image(admin))
         self.assertEqual(image(admin), "homedocker/xtream-vod-bridge:0.4.2.3")
+
+    def test_root_compose_uses_single_pinned_unified_container(self):
+        compose = (ROOT / "compose.yaml").read_text(encoding="utf-8")
+        self.assertIn("  unified:", compose)
+        self.assertIn("image: sha256:7a00ea49da7ff90bcff1823c45b183a779c5ea46424331fa397308c3ab6e1ebd", compose)
+        self.assertIn("production.env", compose)
+        self.assertIn("name: xtream-vod-bridge_xtream_vod_index", compose)
+        self.assertNotIn("  xtream-vod-admin:", compose)
+        self.assertNotIn("  xtream-vod-bridge:", compose)
 
     def test_prefix_ui_does_not_include_sensitive_tokens(self):
         html = self.client.get("/")
