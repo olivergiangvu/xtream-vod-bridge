@@ -14,3 +14,8 @@ docs/
 *.md
 *.pem
 *.key
+
+# Secret-bearing environment files used by the HomeDocker Unified deployment
+production.env
+*.env
+*.env.*

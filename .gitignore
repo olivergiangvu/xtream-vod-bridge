@@ -31,3 +31,8 @@ venv/
 local/
 secrets/
 data/
+
+# Secret-bearing environment files used by the HomeDocker Unified deployment
+production.env
+*.env
+*.env.*
