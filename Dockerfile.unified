@@ -1,6 +1,6 @@
 # Reproducible unified stable image from source (built only during approved release).
 # One Uvicorn worker, one socket, one ASGI lifespan; no second Admin server.
-FROM python:3.12-slim
+FROM python:3.14-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 XTREAM_UNIFIED_MODE=1
 WORKDIR /srv
 COPY requirements.txt ./
