@@ -55,6 +55,8 @@ SERIES_JIT_TIMEOUT = min(15.0, max(2.0, float(os.getenv("SERIES_JIT_TIMEOUT_SECO
 SERIES_JIT_TTL = max(900, int(os.getenv("SERIES_JIT_TTL_HOURS", "6")) * 3600)
 SERIES_JIT_RETRY_SECONDS = max(30, int(os.getenv("SERIES_JIT_RETRY_SECONDS", "120")))
 SERIES_JIT_MAX_VARIANTS = min(8, max(1, int(os.getenv("SERIES_JIT_MAX_VARIANTS", "8"))))
+# Upper bound for provider variants of one requested media ID; independent of AIOStreams limits.
+MAX_STREAM_VARIANTS = min(128, max(20, int(os.getenv("MAX_STREAM_VARIANTS", "64"))))
 # Fail closed on redirects. Some providers use CDN redirects; explicitly allow
 # only approved CDN hostnames, not arbitrary targets supplied by the provider.
 REDIRECT_ALLOWED_HOSTS = {host.strip().lower() for host in
@@ -311,40 +313,56 @@ def find_anime_ids(payload):
 
 
 def quality_hint(*names):
-    """Conservative quality tag from Xtream titles; never claim measured pixels."""
-    for raw in names:
-        text = unicodedata.normalize("NFKC", str(raw or ""))
-        # Provider-labeled Dolby Vision variants must remain distinguishable from SDR 4K.
-        if re.search(r"(?<!\w)(?:4K[\s._-]*DV|UHD[\s._-]*DV|4K[\s._-]*Dolby[\s._-]*Vision)(?!\w)", text, re.I):
-            return "2160p.DV"
-        # Prefer explicit dimensions over promotional shorthand if both occur.
-        for token, label in (
-            ("2160p", "2160p"), ("1080p", "1080p"),
-            ("720p", "720p"), ("480p", "480p"),
-        ):
-            if re.search(r"(?<!\w)" + token + r"(?!\w)", text, re.I):
-                return label
-        for tags, label in (
-            (("4K", "UHD"), "2160p"),
-            (("FHD",), "1080p"),
-            # Bare HD/SD do not prove an exact pixel resolution.
-            (("HD",), "HD"),
-            (("SD",), "SD"),
-        ):
-            if any(re.search(r"(?<!\w)" + tag + r"(?!\w)", text, re.I) for tag in tags):
-                return label
-    return None
+    """Normalise provider-advertised quality; never infer actual video properties."""
+    text = " ".join(unicodedata.normalize("NFKC", str(name or "")) for name in names)
+    # Xtream commonly glues a format flag to a resolution, e.g. 4KDV, 4KHDR10+.
+    text = re.sub(
+        r"(?i)(?<!\w)(8K|4K|UHD|FHD|4320P|2160P|1080P)"
+        r"(DV|DOVI|HDR10(?:\+|PLUS)?|HDR|HLG)(?!\w)",
+        r"\1 \2", text,
+    )
+
+    def has(pattern):
+        return bool(re.search(r"(?<!\w)(?:" + pattern + r")(?!\w)", text, re.I))
+
+    resolution = next((
+        label for pattern, label in (
+            (r"4320p|8K", "4320p"),
+            (r"2160p|4K|UHD", "2160p"),
+            (r"1080p|FHD", "1080p"),
+            (r"720p", "720p"),
+            (r"480p", "480p"),
+            (r"HD", "HD"),
+            (r"SD", "SD"),
+        ) if has(pattern)
+    ), None)
+    if not resolution:
+        return None
+
+    # Read explicit provider flags only. SDR isn't guaranteed by an absent DV tag.
+    tag = next((
+        label for pattern, label in (
+            (r"DV|DOVI|Dolby[\s._-]*Vision", "DV"),
+            (r"HDR10(?:\+|PLUS)", "HDR10Plus"),
+            (r"HDR10", "HDR10"),
+            (r"HDR", "HDR"),
+            (r"HLG", "HLG"),
+        ) if has(pattern)
+    ), None)
+    return resolution + ("." + tag if tag else "")
 
 
 def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
-    """Keep metadata-detectable film/episode names and distinguish tagged variants."""
+    """Provider format prefixes are metadata, not part of the film/series title."""
     text = unicodedata.normalize("NFKC", str(name or "Media"))
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
-    # Strip source label; preserve DV as a filename suffix for stream parsing.
-    text = re.sub(r"^(?:\[(?:4K[\s._-]*DV|UHD[\s._-]*DV)\]|(?:4K[\s._-]*DV|UHD[\s._-]*DV)[\s:_|\-]+)\s*", "", text, flags=re.I)
-    text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|SD|1080P|2160P|720P|480P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
-    # A suffix like "(4K)" or "[2160p]" is a source property, not film title.
-    text = re.sub(r"(?:\s*[\[(](?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P)[\])]|[\s._-]+(?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P))+$", "", text, flags=re.I)
+    tier = r"(?:4320P|2160P|1080P|720P|480P|8K|4K|UHD|FHD|HD|SD)"
+    flag = r"(?:DV|DOVI|DOLBY[\s._-]*VISION|HDR10(?:\+|PLUS)?|HDR|HLG)"
+    label = tier + r"(?:[\s._-]*" + flag + r")?"
+    text = re.sub(r"^(?:(?:\[" + label + r"\])|(?:" + label + r")[\s:|._-]+)\s*",
+                  "", text, flags=re.I)
+    text = re.sub(r"(?:\s*[\[(]" + label + r"[\])]|[\s._-]+" + label + r")+$",
+                  "", text, flags=re.I)
     text = re.sub(r"[^\w]+", ".", text, flags=re.UNICODE).strip(".")
     text = text[:140].rstrip(".") or "Media"
     if kind == "series":
@@ -352,7 +370,6 @@ def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
     if quality:
         text += f".{quality}"
     return f"{text}.{ext}"
-
 
 def media_key(row, kind, requested=None):
     imdb = row["imdb_id"]
@@ -531,10 +548,12 @@ async def hydrate_requested_episode(rows, season, episode):
     if not ops.get("series_on_demand", SERIES_ON_DEMAND) or MOVIES_ONLY or not rows:
         return
     candidates = []
-    for row in rows[:ops.get("series_jit_max_variants", SERIES_JIT_MAX_VARIANTS)]:
+    max_hydrate = ops.get("series_jit_max_variants", SERIES_JIT_MAX_VARIANTS)
+    for row in rows:
         if episode_rows(row["item_id"], season, episode):
             JIT_STATS["cache_hit"] += 1
-        else:
+        elif len(candidates) < max_hydrate:
+            # Do not let already hydrated versions permanently starve later ones.
             candidates.append(row)
     if not candidates:
         return
@@ -869,12 +888,12 @@ def records_for(kind, imdb_id=None, tmdb_id=None, anime_kind=None, anime_id=None
         if anime_kind in ANIME_COLUMNS and anime_id:
             column = ANIME_COLUMNS[anime_kind]  # fixed mapping, never user SQL
             return con.execute(f"SELECT * FROM items WHERE kind=? AND {column}=? "
-                               "ORDER BY item_id DESC LIMIT 20", (kind, anime_id)).fetchall()
+                               "ORDER BY item_id DESC LIMIT ?", (kind, anime_id, MAX_STREAM_VARIANTS)).fetchall()
         if tmdb_id:
             return con.execute("SELECT * FROM items WHERE kind=? AND (imdb_id=? OR tmdb_id=?) "
-                               "ORDER BY item_id DESC LIMIT 20", (kind, imdb_id, tmdb_id)).fetchall()
+                               "ORDER BY item_id DESC LIMIT ?", (kind, imdb_id, tmdb_id, MAX_STREAM_VARIANTS)).fetchall()
         return con.execute("SELECT * FROM items WHERE kind=? AND imdb_id=? "
-                           "ORDER BY item_id DESC LIMIT 20", (kind, imdb_id)).fetchall()
+                           "ORDER BY item_id DESC LIMIT ?", (kind, imdb_id, MAX_STREAM_VARIANTS)).fetchall()
 
 
 @app.get("/a/{token}/stream/{media_type}/{media_id}.json")
@@ -913,6 +932,7 @@ async def streams(token: str, media_type: str, media_id: str):
     if media_type == "series" and ops.get("series_on_demand", SERIES_ON_DEMAND):
         await hydrate_requested_episode(rows, int(season), int(episode))
     result = []
+    seen_filenames = set()
     for row in rows:
         if media_type == "movie":
             selected = [(row["item_id"], row["extension"], None)]
@@ -926,6 +946,12 @@ async def streams(token: str, media_type: str, media_id: str):
             quality = quality_hint(episode_name, row["name"])
             filename = friendly_filename(row["name"], media_type, ext, season, episode,
                                          quality=quality)
+            # Different upstream stream IDs must stay distinct even if labels and
+            # nominal resolution match. Otherwise AIOStreams can dedup by filename.
+            if filename.casefold() in seen_filenames:
+                stem, suffix = filename.rsplit(".", 1)
+                filename = f"{stem}.v{sid}.{suffix}"
+            seen_filenames.add(filename.casefold())
             # Carry the exact Stremio request identity downstream. This also
             # preserves a requested IMDb ID when only TMDb was stored locally,
             # or a requested Kitsu/AniList ID when the row has an IMDb as well.
@@ -943,9 +969,11 @@ async def streams(token: str, media_type: str, media_id: str):
                            "url": signed_url(media_type, sid, ext,
                                              filename=filename, identity=identity),
                            "behaviorHints": hints})
-        if len(result) >= 20:
+            if len(result) >= MAX_STREAM_VARIANTS:
+                break
+        if len(result) >= MAX_STREAM_VARIANTS:
             break
-    selected_streams = result[:20]
+    selected_streams = result[:MAX_STREAM_VARIANTS]
     ops.event("stream_request", media_type, "ok" if selected_streams else "empty",
               duration_ms=(time.monotonic() - started) * 1000,
               amount=len(selected_streams))
