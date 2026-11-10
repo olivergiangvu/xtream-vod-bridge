@@ -918,10 +918,17 @@ async def streams(token: str, media_type: str, media_id: str):
         requested_identity = (media_id_value if imdb_match else
                               f"tmdb-{'movie' if media_type == 'movie' else 'tv'}-{media_id_value}")
         if imdb_match:
-            rows = records_for(media_type, imdb_id=media_id_value)
-            if not rows and TMDB_KEY:
-                rows = records_for(media_type, imdb_id=media_id_value,
-                                   tmdb_id=await tmdb_from_imdb(media_type, media_id_value))
+            # Provider editions may disagree on ID availability: some include
+            # IMDb only, others TMDb only. Never stop at the first IMDb match;
+            # merge matching editions under the same verified TMDb identity.
+            direct = records_for(media_type, imdb_id=media_id_value)
+            known_tmdb = {str(r["tmdb_id"]) for r in direct if r["tmdb_id"]}
+            matching_tmdb = next(iter(known_tmdb)) if len(known_tmdb) == 1 else None
+            if not matching_tmdb and TMDB_KEY:
+                matching_tmdb = await tmdb_from_imdb(media_type, media_id_value)
+            rows = (records_for(media_type, imdb_id=media_id_value,
+                                tmdb_id=matching_tmdb)
+                    if matching_tmdb else direct)
         else:
             rows = records_for(media_type, tmdb_id=media_id_value)
     if media_type == "series" and (season is None or episode is None):
