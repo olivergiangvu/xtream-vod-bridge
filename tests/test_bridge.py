@@ -94,6 +94,64 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("4KDV.VisionQuest", dv["title"])
         self.assertNotEqual(dv["url"], found[1318445]["url"])
 
+    def test_quality_prefixes_cover_future_provider_variants(self):
+        cases = [
+            ("4KHDR10+: VisionQuest (2026)", "2160p.HDR10Plus"),
+            ("4K HDR: VisionQuest (2026)", "2160p.HDR"),
+            ("UHD.DV: VisionQuest (2026)", "2160p.DV"),
+            ("8K: VisionQuest (2026)", "4320p"),
+            ("FHD: VisionQuest (2026)", "1080p"),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                quality = bridge.quality_hint("No Strings", raw)
+                self.assertEqual(quality, expected)
+                filename = bridge.friendly_filename(raw, "series", "mkv", 1, 1, quality=quality)
+                self.assertEqual(filename, f"VisionQuest.2026.S01E01.{expected}.mkv")
+        self.assertEqual(bridge.quality_hint("No Strings", "VisionQuest (2026)"), None)
+
+    async def test_same_quality_streams_are_not_filename_duplicates(self):
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            for series_id, stream_id in [(1000, 1100), (1001, 1101), (1002, 1102)]:
+                con.execute(
+                    "INSERT INTO items(kind,item_id,name,extension,tmdb_id) "
+                    "VALUES ('series',?,?,?,?)",
+                    (series_id, "4K: VisionQuest (2026)", "mkv", "213375")
+                )
+                con.execute(
+                    "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                    "VALUES (?,1,1,?,'mkv','No Strings')", (series_id, stream_id)
+                )
+        r = await bridge.streams("a" * 40, "series", "tmdb:tv:213375:1:1")
+        streams = r["streams"]
+        self.assertEqual(len(streams), 3)
+        filenames = [s["behaviorHints"]["filename"] for s in streams]
+        self.assertEqual(len(set(filenames)), 3)
+        self.assertTrue(all("S01E01.2160p" in fn for fn in filenames))
+        self.assertEqual(len({s["url"] for s in streams}), 3)
+
+    async def test_more_than_twenty_provider_variants_are_not_dropped(self):
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            for n in range(25):
+                con.execute(
+                    "INSERT INTO items(kind,item_id,name,extension,tmdb_id) "
+                    "VALUES ('series',?,?,?,?)",
+                    (3000 + n, "4K: VisionQuest (2026)", "mkv", "213375")
+                )
+                con.execute(
+                    "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                    "VALUES (?,1,1,?,'mkv','No Strings')", (3000 + n, 4000 + n)
+                )
+        r = await bridge.streams("a" * 40, "series", "tmdb:tv:213375:1:1")
+        self.assertEqual(len(r["streams"]), 25)
+        self.assertEqual(
+            len({s["behaviorHints"]["filename"] for s in r["streams"]}), 25
+        )
+
     def test_series_bootstrap_batch_limit_rejects_unsafe_config(self):
         with patch.object(bridge, "SERIES_BOOTSTRAP_BATCH", 51):
             with self.assertRaisesRegex(RuntimeError, "SERIES_BOOTSTRAP_BATCH"):
