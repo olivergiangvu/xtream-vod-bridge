@@ -109,6 +109,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 filename = bridge.friendly_filename(raw, "series", "mkv", 1, 1, quality=quality)
                 self.assertEqual(filename, f"VisionQuest.2026.S01E01.{expected}.mkv")
         self.assertEqual(bridge.quality_hint("No Strings", "VisionQuest (2026)"), None)
+        self.assertEqual(bridge.quality_hint("Episode.S01E01.1080p", "4KDV: VisionQuest (2026)"), "1080p")
 
     async def test_same_quality_streams_are_not_filename_duplicates(self):
         with bridge.db() as con:
