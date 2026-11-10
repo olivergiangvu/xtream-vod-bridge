@@ -55,6 +55,32 @@ class OnDemandSeriesTests(unittest.IsolatedAsyncioTestCase):
         with bridge.db() as con:
             self.assertEqual(con.execute("SELECT count(*) FROM episodes").fetchone()[0], 2)
 
+    async def test_jit_progresses_beyond_first_eight_variants(self):
+        """Warm first batch must not block newly added provider versions forever."""
+        self.seed(*[
+            (800 + n, "4K Fixture Show", "tt7654321", "42")
+            for n in range(10)
+        ])
+        called = []
+
+        async def source(action, **params):
+            sid = params["series_id"]
+            called.append(sid)
+            return {"episodes": {"1": [{
+                "id": 2000 + sid,
+                "episode_num": 1,
+                "container_extension": "mkv",
+                "title": "No Strings",
+            }]}}
+
+        with patch.object(bridge, "SERIES_ON_DEMAND", True), \
+             patch.object(bridge, "xtream", new=source):
+            first = await bridge.streams(TOKEN, "series", "tt7654321:1:1")
+            second = await bridge.streams(TOKEN, "series", "tt7654321:1:1")
+        self.assertEqual(len(first["streams"]), 8)
+        self.assertEqual(len(second["streams"]), 10)
+        self.assertEqual(len(set(called)), 10)
+
     async def test_duplicate_concurrent_request_is_singleflight(self):
         self.seed((711, "Example Show", "tt7654321", "42"))
         calls = []
