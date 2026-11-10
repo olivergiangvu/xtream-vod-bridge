@@ -313,43 +313,47 @@ def find_anime_ids(payload):
 
 
 def quality_hint(*names):
-    """Normalise provider-advertised quality; never infer actual video properties."""
-    text = " ".join(unicodedata.normalize("NFKC", str(name or "")) for name in names)
-    # Xtream commonly glues a format flag to a resolution, e.g. 4KDV, 4KHDR10+.
-    text = re.sub(
-        r"(?i)(?<!\w)(8K|4K|UHD|FHD|4320P|2160P|1080P)"
-        r"(DV|DOVI|HDR10(?:\+|PLUS)?|HDR|HLG)(?!\w)",
-        r"\1 \2", text,
-    )
+    """Prefer explicit episode quality; never infer measured video properties."""
+    # The provider may name a 1080p episode under a 4K series collection.
+    # Consider inputs in caller priority order: episode name, then series name.
+    for raw in names:
+        text = unicodedata.normalize("NFKC", str(raw or ""))
+        # Xtream commonly glues a format flag to the resolution (4KDV, 4KHDR10+).
+        text = re.sub(
+            r"(?i)(?<!\w)(8K|4K|UHD|FHD|4320P|2160P|1080P)"
+            r"(DV|DOVI|HDR10(?:\+|PLUS)?|HDR|HLG)(?!\w)",
+            r"\1 \2", text,
+        )
 
-    def has(pattern):
-        return bool(re.search(r"(?<!\w)(?:" + pattern + r")(?!\w)", text, re.I))
+        def has(pattern):
+            return bool(re.search(r"(?<!\w)(?:" + pattern + r")(?!\w)", text, re.I))
 
-    resolution = next((
-        label for pattern, label in (
-            (r"4320p|8K", "4320p"),
-            (r"2160p|4K|UHD", "2160p"),
-            (r"1080p|FHD", "1080p"),
-            (r"720p", "720p"),
-            (r"480p", "480p"),
-            (r"HD", "HD"),
-            (r"SD", "SD"),
-        ) if has(pattern)
-    ), None)
-    if not resolution:
-        return None
+        resolution = next((
+            label for pattern, label in (
+                (r"4320p|8K", "4320p"),
+                (r"2160p|4K|UHD", "2160p"),
+                (r"1080p|FHD", "1080p"),
+                (r"720p", "720p"),
+                (r"480p", "480p"),
+                (r"HD", "HD"),
+                (r"SD", "SD"),
+            ) if has(pattern)
+        ), None)
+        if not resolution:
+            continue
 
-    # Read explicit provider flags only. SDR isn't guaranteed by an absent DV tag.
-    tag = next((
-        label for pattern, label in (
-            (r"DV|DOVI|Dolby[\s._-]*Vision", "DV"),
-            (r"HDR10(?:\+|PLUS)", "HDR10Plus"),
-            (r"HDR10", "HDR10"),
-            (r"HDR", "HDR"),
-            (r"HLG", "HLG"),
-        ) if has(pattern)
-    ), None)
-    return resolution + ("." + tag if tag else "")
+        # Only attach a provider quality flag from that same release label.
+        tag = next((
+            label for pattern, label in (
+                (r"DV|DOVI|Dolby[\s._-]*Vision", "DV"),
+                (r"HDR10(?:\+|PLUS)", "HDR10Plus"),
+                (r"HDR10", "HDR10"),
+                (r"HDR", "HDR"),
+                (r"HLG", "HLG"),
+            ) if has(pattern)
+        ), None)
+        return resolution + ("." + tag if tag else "")
+    return None
 
 
 def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
