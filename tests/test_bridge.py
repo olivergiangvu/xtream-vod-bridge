@@ -152,6 +152,50 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             len({s["behaviorHints"]["filename"] for s in r["streams"]}), 25
         )
 
+    async def test_mixed_imdb_tmdb_provider_variants_are_merged(self):
+        """A new IMDb-tagged edition cannot hide older TMDb-only editions."""
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            for series_id, label, imdb, tmdb, stream_id in (
+                (100, "4K: VisionQuest (2026)", "tt7654321", "213375", 1100),
+                (101, "4KDV: VisionQuest (2026)", None, "213375", 1101),
+                (102, "VisionQuest (2026)", None, "213375", 1102),
+            ):
+                con.execute(
+                    "INSERT INTO items(kind,item_id,name,extension,imdb_id,tmdb_id) "
+                    "VALUES ('series',?,?,?,?,?)",
+                    (series_id, label, "mkv", imdb, tmdb)
+                )
+                con.execute(
+                    "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                    "VALUES (?,1,1,?,'mkv','No Strings')", (series_id, stream_id)
+                )
+        r = await bridge.streams("a" * 40, "series", "tt7654321:1:1")
+        self.assertEqual(len(r["streams"]), 3)
+        self.assertEqual(
+            {int(s["url"].split("/play/series/", 1)[1].split("/", 1)[0])
+             for s in r["streams"]},
+            {1100, 1101, 1102}
+        )
+        self.assertTrue(all("/tt7654321/" in s["url"] for s in r["streams"]))
+
+    async def test_crosswalk_merges_when_first_imdb_match_lacks_tmdb(self):
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            con.execute("INSERT INTO items(kind,item_id,name,extension,imdb_id) "
+                        "VALUES ('series',100,'VisionQuest','mkv','tt7654321')")
+            con.execute("INSERT INTO items(kind,item_id,name,extension,tmdb_id) "
+                        "VALUES ('series',101,'4KDV: VisionQuest','mkv','213375')")
+            for series_id, stream_id in ((100, 1100), (101, 1101)):
+                con.execute("INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                            "VALUES (?,1,1,?,'mkv','No Strings')", (series_id, stream_id))
+        with patch.object(bridge, "TMDB_KEY", "dummy"), \
+             patch.object(bridge, "tmdb_from_imdb", new=AsyncMock(return_value="213375")):
+            r = await bridge.streams("a" * 40, "series", "tt7654321:1:1")
+        self.assertEqual(len(r["streams"]), 2)
+
     def test_series_bootstrap_batch_limit_rejects_unsafe_config(self):
         with patch.object(bridge, "SERIES_BOOTSTRAP_BATCH", 51):
             with self.assertRaisesRegex(RuntimeError, "SERIES_BOOTSTRAP_BATCH"):
