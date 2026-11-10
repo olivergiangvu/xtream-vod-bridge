@@ -61,6 +61,39 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(r["streams"]), 1)
         self.assertIn("/movie/17/tmdb-movie-603/", r["streams"][0]["url"])
 
+    async def test_iptv_4kdv_episode_variant_preserved(self):
+        """Regression: legacy IPTV VOD returns Standard, 4KDV, and 4K independently."""
+        with bridge.db() as con:
+            con.execute("DELETE FROM episodes")
+            con.execute("DELETE FROM items")
+            variants = (
+                (1233584, "VisionQuest (2026)", 1234460, "VisionQuest - S01E01 - No Strings"),
+                (1277656, "4KDV: VisionQuest (2026)", 1278239, "No Strings"),
+                (1317642, "4K: VisionQuest (2026)", 1318445, "No Strings"),
+            )
+            for series_id, name, stream_id, ep_name in variants:
+                con.execute(
+                    "INSERT INTO items(kind,item_id,name,extension,tmdb_id) "
+                    "VALUES ('series',?,?,?,?)", (series_id, name, "mkv", "213375")
+                )
+                con.execute(
+                    "INSERT INTO episodes(series_id,season,episode,stream_id,extension,name) "
+                    "VALUES (?,1,1,?,?,?)", (series_id, stream_id, "mkv", ep_name)
+                )
+        result = await bridge.streams("a" * 40, "series", "tmdb:tv:213375:1:1")
+        streams = result["streams"]
+        self.assertEqual(len(streams), 3)
+        found = {
+            int(stream["url"].split("/play/series/", 1)[1].split("/", 1)[0]): stream
+            for stream in streams
+        }
+        self.assertEqual(set(found), {1234460, 1278239, 1318445})
+        dv = found[1278239]
+        self.assertEqual(dv["behaviorHints"]["filename"], "VisionQuest.2026.S01E01.2160p.DV.mkv")
+        self.assertIn("2160p.DV", dv["name"])
+        self.assertNotIn("4KDV.VisionQuest", dv["title"])
+        self.assertNotEqual(dv["url"], found[1318445]["url"])
+
     def test_series_bootstrap_batch_limit_rejects_unsafe_config(self):
         with patch.object(bridge, "SERIES_BOOTSTRAP_BATCH", 51):
             with self.assertRaisesRegex(RuntimeError, "SERIES_BOOTSTRAP_BATCH"):
