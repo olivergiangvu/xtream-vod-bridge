@@ -314,6 +314,9 @@ def quality_hint(*names):
     """Conservative quality tag from Xtream titles; never claim measured pixels."""
     for raw in names:
         text = unicodedata.normalize("NFKC", str(raw or ""))
+        # Provider-labeled Dolby Vision variants must remain distinguishable from SDR 4K.
+        if re.search(r"(?<!\w)(?:4K[\s._-]*DV|UHD[\s._-]*DV|4K[\s._-]*Dolby[\s._-]*Vision)(?!\w)", text, re.I):
+            return "2160p.DV"
         # Prefer explicit dimensions over promotional shorthand if both occur.
         for token, label in (
             ("2160p", "2160p"), ("1080p", "1080p"),
@@ -337,6 +340,8 @@ def friendly_filename(name, kind, ext, season=None, episode=None, quality=None):
     """Keep metadata-detectable film/episode names and distinguish tagged variants."""
     text = unicodedata.normalize("NFKC", str(name or "Media"))
     text = re.sub(r"\.(?:mp4|mkv|avi|mov|ts|m3u8|flv|wmv|3gp)$", "", text, flags=re.I)
+    # Strip source label; preserve DV as a filename suffix for stream parsing.
+    text = re.sub(r"^(?:\[(?:4K[\s._-]*DV|UHD[\s._-]*DV)\]|(?:4K[\s._-]*DV|UHD[\s._-]*DV)[\s:_|\-]+)\s*", "", text, flags=re.I)
     text = re.sub(r"^(?:(?:\[(?:4K|UHD|HD|FHD|SD|1080P|2160P|720P|480P)\]|(?:4K|UHD|FHD)[\s:_|-]+)\s*)+", "", text, flags=re.I)
     # A suffix like "(4K)" or "[2160p]" is a source property, not film title.
     text = re.sub(r"(?:\s*[\[(](?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P)[\])]|[\s._-]+(?:4K|UHD|FHD|HD|SD|2160P|1080P|720P|480P))+$", "", text, flags=re.I)
